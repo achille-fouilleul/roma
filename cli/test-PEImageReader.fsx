@@ -21,10 +21,10 @@ for name in names do
     match img.CliHeader with
     | None -> printfn " (none)"
     | Some cliHeader ->
-        if not(cliHeader.metaData.IsZero) then
-            let metadata = img.Read(cliHeader.metaData)
-            printfn "  MetaData size: %d" metadata.Length
         if not(cliHeader.strongNameSig.IsZero) then
             printfn "  StrongNameSig: %s" (hex(img.Read(cliHeader.strongNameSig)))
+        if not(cliHeader.metaData.IsZero) then
+            let m = ModuleReader(img)
+            ignore m
 
     printfn ""

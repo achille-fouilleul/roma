@@ -3,6 +3,7 @@
 open System
 open System.IO
 open System.Security.Cryptography
+open LittleEndian
 
 type PEVirtSlice =
     {
@@ -24,16 +25,10 @@ type PEImageReader(path : string) =
     let data = File.ReadAllBytes(path)
 
     let read16 pos =
-        let x0 = uint16 data.[pos]
-        let x1 = uint16 data.[pos + 1]
-        x0 ||| (x1 <<< 8)
+        u16 data pos
 
     let read32 pos =
-        let x0 = uint32 data.[pos]
-        let x1 = uint32 data.[pos + 1]
-        let x2 = uint32 data.[pos + 2]
-        let x3 = uint32 data.[pos + 3]
-        x0 ||| (x1 <<< 8) ||| (x2 <<< 16) ||| (x3 <<< 24)
+        u32 data pos
 
     let readRvaSize pos =
         {
