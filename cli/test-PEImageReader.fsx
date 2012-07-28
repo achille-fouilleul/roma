@@ -10,10 +10,19 @@ let hex(data : byte[]) =
         buffer.AppendFormat("{0:x2}", x) |> ignore
     buffer.ToString()
 
-let names = [ "mscorlib.dll"; "System.dll" ]
+let names = [
+    "mscorlib.dll"
+    "System.dll"
+    @"C:\Program Files\Microsoft F#\v4.0\Fsc.exe"
+]
+
 for name in names do
     printfn "%s" name
-    let path = Path.Combine(@"C:\Windows\Microsoft.NET\Framework\v4.0.30319", name)
+    let path =
+        if name.Contains(":") then
+            name
+        else
+            Path.Combine(@"C:\Windows\Microsoft.NET\Framework\v4.0.30319", name)
     let img = PEImageReader(path)
     printfn " StrongNameHash: %s" (hex img.StrongNameHash)
 
@@ -26,5 +35,6 @@ for name in names do
         if not(cliHeader.metaData.IsZero) then
             let m = ModuleReader(img)
             ignore m
+        printfn "  EntryPointToken: 0x%x" cliHeader.entryPointToken
 
     printfn ""

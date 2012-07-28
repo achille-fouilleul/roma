@@ -18,6 +18,7 @@ type CliHeader =
     {
         runtimeVersion : uint16 * uint16
         metaData : PEVirtSlice
+        entryPointToken : uint32
         strongNameSig : PEVirtSlice
     }
 
@@ -89,9 +90,10 @@ type PEImageReader(path : string) =
         else
             let off = rvaToOff cliHdr.rva
             Some {
-                runtimeVersion = read16 (off + 4), read16 (off + 6)
-                metaData = readRvaSize (off + 8)
-                strongNameSig = readRvaSize (off + 32)
+                runtimeVersion = read16(off + 4), read16(off + 6)
+                metaData = readRvaSize(off + 8)
+                entryPointToken = read32(off + 20)
+                strongNameSig = readRvaSize(off + 32)
             }
 
     member this.StrongNameHash =

@@ -3,10 +3,6 @@
 open System
 open LittleEndian
 
-module private Private =
-    let decodeBlob index data =
-        raise(System.NotImplementedException())
-
 type ByteReader(array : byte[], index) =
     let mutable offset = index
 
@@ -216,7 +212,6 @@ type ModuleReader(peImgReader : PEImageReader) =
             |]
 
         let inline readTable table : 't[]=
-            eprintfn "%A" table
             let rowCount = rowCounts.[Tables.tableNumber table]
             let readRow = TableHelpers.makeRowReader heaps rowCounts table typeof<'t>
             [|
@@ -262,7 +257,5 @@ type ModuleReader(peImgReader : PEImageReader) =
         let genericParamTable : GenericParamRow[] = readTable TableNumber.GenericParam
         let methodSpecTable : MethodSpecRow[] = readTable TableNumber.MethodSpec
         let genericParamConstraintTable : GenericParamConstraintRow[] = readTable TableNumber.GenericParamConstraint
-
-        eprintfn "%d %d" byteReader.Offset data.Length
 
         () // TODO
