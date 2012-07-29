@@ -45,6 +45,7 @@
     <Compile Include="Flags.fs" />
     <Compile Include="Tables.fs" />
     <Compile Include="ModuleReader.fs" />
+    <None Include="test-XEndian.fsx" />
     <None Include="test-PEImageReader.fsx" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\FSharp\1.0\Microsoft.FSharp.Targets" Condition="!Exists('$(MSBuildBinPath)\Microsoft.Build.Tasks.v4.0.dll')" />
