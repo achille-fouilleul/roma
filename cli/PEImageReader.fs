@@ -70,19 +70,18 @@ type PEImageReader(path : string) =
         p + r - s |> int
     let cliHdr = readRvaSize (peOptHdrOff + 208)
 
-    member this.GetSlice =
-        function
-        | Some rva0, Some rva1 ->
-            let off0 = rvaToOff (uint32 rva0)
-            let off1 = rvaToOff (uint32 rva1)
-            readArr off0 (off1 - off0 + 1)
-        | _ -> failwith "Both bounds must be defined."
+    member this.Item
+        with get(rva) = data.[rvaToOff(uint32 rva)]
+
+    member this.Read(rva, size) =
+        if rva = 0 then
+            raise(ArgumentNullException "rva")
+        readArr (rvaToOff(uint32 rva)) size
 
     member this.Read(slice : PEVirtSlice) =
         if slice.IsZero then
-            raise(ArgumentNullException("slice"))
-        let off = rvaToOff slice.rva
-        readArr off (int slice.size)
+            raise(ArgumentNullException "slice")
+        readArr (rvaToOff slice.rva) (int slice.size)
 
     member this.CliHeader =
         if cliHdr.IsZero then

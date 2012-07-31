@@ -5,7 +5,7 @@ open System.IO
 open Roma.Cli
 
 let hex(data : byte[]) =
-    let buffer = System.Text.StringBuilder()
+    let buffer = System.Text.StringBuilder(2 * data.Length)
     for x in data do
         buffer.AppendFormat("{0:x2}", x) |> ignore
     buffer.ToString()
@@ -30,11 +30,14 @@ for name in names do
     match img.CliHeader with
     | None -> printfn " (none)"
     | Some cliHeader ->
+        printfn "  EntryPointToken: 0x%x" cliHeader.entryPointToken
         if not(cliHeader.strongNameSig.IsZero) then
             printfn "  StrongNameSig: %s" (hex(img.Read(cliHeader.strongNameSig)))
         if not(cliHeader.metaData.IsZero) then
             let m = ModuleReader(img)
-            ignore m
-        printfn "  EntryPointToken: 0x%x" cliHeader.entryPointToken
+            printfn "  Name: %s" m.Name
+            printfn "  Id: %A" m.Id
+            for (name, rva) in m.MethodRvas do
+                printfn "  %s %A" name (m.ReadMethodBody(rva))
 
     printfn ""

@@ -44,6 +44,7 @@
     <Compile Include="PEImageReader.fs" />
     <Compile Include="Flags.fs" />
     <Compile Include="Tables.fs" />
+    <Compile Include="Metadata.fs" />
     <Compile Include="ModuleReader.fs" />
     <None Include="test-XEndian.fsx" />
     <None Include="test-PEImageReader.fsx" />
