@@ -878,14 +878,14 @@ type GenericParamConstraintRow =
         row :> obj
 
 module Tables =
-
     let tokenOptOfValue =
         function
         | 0u -> None
         | (value : uint32) ->
             let table : TableNumber = EnumOfValue(byte(value >>> 24))
             let index = int(value &&& 0xffffffu)
-            assert(index <> 0)
+            if index = 0 then
+                failwith "invalid token"
             Some (table, index)
 
     let tokenOfValue value =

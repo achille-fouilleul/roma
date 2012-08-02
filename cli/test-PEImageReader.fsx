@@ -34,10 +34,13 @@ for name in names do
         if not(cliHeader.strongNameSig.IsZero) then
             printfn "  StrongNameSig: %s" (hex(img.Read(cliHeader.strongNameSig)))
         if not(cliHeader.metaData.IsZero) then
-            let m = ModuleReader(img)
-            printfn "  Name: %s" m.Name
-            printfn "  Id: %A" m.Id
-            for (name, rva) in m.MethodRvas do
-                printfn "  %s %A" name (m.ReadMethodBody(rva))
+            let md = MetadataReader(img)
+            let il = CILReader(img)
+            let row = md.ModuleTable.[0]
+            printfn "  Name: %s" row.Name
+            printfn "  Id: %A" row.Mvid
+            for row in md.MethodDefTable do
+                if row.Rva <> 0u then
+                    printfn "  %s %A" row.Name (il.ReadMethodBody(row.Rva))
 
     printfn ""

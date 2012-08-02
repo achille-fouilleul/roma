@@ -71,17 +71,17 @@ type PEImageReader(path : string) =
     let cliHdr = readRvaSize (peOptHdrOff + 208)
 
     member this.Item
-        with get(rva) = data.[rvaToOff(uint32 rva)]
+        with get(rva) = data.[rvaToOff rva]
 
     member this.Read(rva, size) =
-        if rva = 0 then
+        if rva = 0u then
             raise(ArgumentNullException "rva")
-        readArr (rvaToOff(uint32 rva)) size
+        readArr (rvaToOff rva) (int size)
 
     member this.Read(slice : PEVirtSlice) =
         if slice.IsZero then
             raise(ArgumentNullException "slice")
-        readArr (rvaToOff slice.rva) (int slice.size)
+        this.Read(slice.rva, slice.size)
 
     member this.CliHeader =
         if cliHdr.IsZero then

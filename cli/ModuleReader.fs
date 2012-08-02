@@ -23,7 +23,10 @@ type ByteReader(array, index) =
         offset <- offset + 4
         x
 
-type private Heaps(stringHeapData, blobHeapData, guidHeapData, heapSizes) =
+    member this.S32() =
+        this.U32() |> int32
+
+type Heaps(stringHeapData, userStringHeapData, blobHeapData, guidHeapData, heapSizes) =
     static let decodeBlob data index =
         match int(Array.get data index) with
         | n when n <= 0x7f -> Array.sub data (index + 1) n
@@ -77,12 +80,18 @@ type private Heaps(stringHeapData, blobHeapData, guidHeapData, heapSizes) =
                 cache.Add(index, blob)
             blob :> obj
 
-    member this.StringReader with get() = stringReader
-    member this.GuidReader with get() = guidReader
-    member this.BlobReader with get() = blobReader
+    member this.StringReader = stringReader
+    member this.GuidReader = guidReader
+    member this.BlobReader = blobReader
 
-    static member DecodeBlob(data, index) =
-        decodeBlob data index
+    member this.ReadUserString(token) =
+        if (token &&& 0xff000000u) <> 0x70000000u then
+            raise(ArgumentException "invalid string token")
+        let blob = decodeBlob userStringHeapData (int(token &&& 0xffffffu))
+        if (blob.Length % 2) <> 0 then
+            System.Text.Encoding.Unicode.GetString(blob, 0, blob.Length - 1)
+        else
+            System.Text.Encoding.Unicode.GetString(blob)
 
 module private TableHelpers =
     let private (|SimpleIndexField|CodedIndexField|Other|) (field : System.Reflection.PropertyInfo) =
@@ -157,7 +166,7 @@ module private TableHelpers =
                 |]
             makeRecord vals
 
-type ModuleReader(peImgReader : PEImageReader) =
+type MetadataReader(peImgReader : PEImageReader) =
     let cliHeader =
         match peImgReader.CliHeader with
         | None -> raise(ArgumentException("CLI header missing"))
@@ -203,7 +212,7 @@ type ModuleReader(peImgReader : PEImageReader) =
     let heapSizes = tableStreamData.[6]
     let valid = u64 tableStreamData 8
 
-    let heaps = Heaps(stringHeapData, blobHeapData, guidHeapData, heapSizes)
+    let heaps = Heaps(stringHeapData, userStringHeapData, blobHeapData, guidHeapData, heapSizes)
 
     let byteReader = ByteReader(tableStreamData, 24)
 
@@ -268,39 +277,24 @@ type ModuleReader(peImgReader : PEImageReader) =
     do if moduleTable.Length <> 1 then
         failwith "invalid Module table"
 
-    let moduleName, moduleId =
-        let row = moduleTable.[0]
-        row.Name, row.Mvid
+    // TODO: other checks
 
-    member this.Name = moduleName
+    member this.Heaps = heaps
 
-    member this.Id = moduleId
+    member this.ModuleTable = moduleTable
+    // TODO: other tables
+    member this.MethodDefTable = methodDefTable
+    // TODO: other tables
 
-    member this.MethodRvas =
-        [
-            for methodDefRow in methodDefTable do
-                let rva = int methodDefRow.Rva
-                if rva <> 0 then
-                    yield methodDefRow.Name, rva
-        ]
-
-    member this.ReadUserString(token) =
-        if (token &&& 0xff000000u) <> 0x70000000u then
-            raise(ArgumentException "invalid string token")
-        let blob = Heaps.DecodeBlob(userStringHeapData, int(token &&& 0xffffffu))
-        if (blob.Length % 2) <> 0 then
-            System.Text.Encoding.Unicode.GetString(blob, 0, blob.Length - 1)
-        else
-            System.Text.Encoding.Unicode.GetString(blob)
-
+type CILReader(peImgReader : PEImageReader) =
     member this.ReadMethodBody(rva) =
         let hd = peImgReader.[rva]
-        let off, codeSize, maxStack, locals, initLocals, moreSects =
+        let off, codeSize, maxStack, localVarSigToken, initLocals, moreSects =
             match hd &&& 0x03uy with
             | 0x02uy ->
-                1, int(hd >>> 2), 8, Array.empty, false, false
+                1u, uint32(hd >>> 2), 8, None, false, false
             | 0x03uy ->
-                let hd = ByteReader(peImgReader.Read(rva, 12), 0)
+                let hd = ByteReader(peImgReader.Read(rva, 12u), 0)
                 let tmp = hd.U16()
                 let flags = tmp &&& 0x0fffus
                 if (tmp >>> 12) <> 3us then
@@ -309,19 +303,12 @@ type ModuleReader(peImgReader : PEImageReader) =
                 let initLocals = (flags &&& 0x10us) <> 0us
                 let maxStack = hd.U16() |> int
                 let codeSize = hd.U32()
-                let localVarSigTok = hd.U32()
-                let locals =
-                    match Tables.tokenOptOfValue localVarSigTok with
-                    | None -> Array.empty
-                    | Some(TableNumber.StandAloneSig, idx) ->
-                        let row = standAloneSigTable.[idx - 1]
-                        row.Signature // TODO: decodeLocalVarSig
-                    | _ -> failwith "Invalid local var signature token."
-                hd.Offset, int codeSize, maxStack, locals, initLocals, moreSects
+                let localVarSigTok = hd.U32() |> Tables.tokenOptOfValue 
+                uint32 hd.Offset, codeSize, maxStack, localVarSigTok, initLocals, moreSects
             | _ -> failwith "Invalid method header type."
         let codeRva = rva + off
         let codeBytes = peImgReader.Read(codeRva, codeSize)
-        let excRva = (codeRva + codeSize + 3) &&& ~~~3
+        let excRva = (codeRva + codeSize + 3u) &&& ~~~3u
         let instrs = codeBytes // TODO: decodeInstructions
         let excClauses =
             if moreSects then
@@ -332,59 +319,57 @@ type ModuleReader(peImgReader : PEImageReader) =
                     raise (new System.NotImplementedException())
                 let clauses =
                     if (flags &&& 0x40uy) <> 0x00uy then
-                        let dataSize = (u32(peImgReader.Read(excRva, 4)) 0) >>> 8 |> int
+                        let dataSize = (u32(peImgReader.Read(excRva, 4u)) 0) >>> 8 |> int
                         let n = (dataSize - 4 + 23) / 24
-                        seq {
-                            for k in 0 .. n - 1 ->
-                                let data = peImgReader.Read(excRva + 4 + 24 * k, 24)
-                                let flags = u32 data 0 |> uint16
+                        let reader = ByteReader(peImgReader.Read(excRva + 4u, uint32(24 * n)), 0)
+                        [
+                            for k in 1 .. n ->
+                                let flags = reader.U32() |> uint16
                                 let ranges : ExceptionClauseRanges = {
-                                    tryOffset = u32 data 4 |> int
-                                    tryLength = u32 data 8 |> int
-                                    handlerOffset = u32 data 12 |> int
-                                    handlerLength = u32 data 16 |> int
+                                    tryOffset = reader.S32()
+                                    tryLength = reader.S32()
+                                    handlerOffset = reader.S32()
+                                    handlerLength = reader.S32()
                                 }
-                                let classTokenOrFilterOffset = u32 data 20
+                                let classTokenOrFilterOffset = reader.U32()
                                 (flags, ranges, classTokenOrFilterOffset)
-                        }
+                        ]
                     else
-                        let dataSize = peImgReader.[excRva + 1] |> int
+                        let dataSize = peImgReader.[excRva + 1u] |> int
                         let n = (dataSize - 4 + 11) / 12
-                        seq {
-                            for k in 0 .. n - 1 ->
-                                let data = peImgReader.Read(excRva + 4 + 12 * k, 12)
-                                let flags = u16 data 0
+                        let reader = ByteReader(peImgReader.Read(excRva + 4u, uint32(12 * n)), 0)
+                        [
+                            for k in 1 .. n ->
+                                let flags = reader.U16()
                                 let ranges : ExceptionClauseRanges = {
-                                    tryOffset = u16 data 2 |> int
-                                    tryLength = data.[4] |> int
-                                    handlerOffset = u16 data 5 |> int
-                                    handlerLength = data.[7] |> int
+                                    tryOffset = reader.U16() |> int
+                                    tryLength = reader.U8() |> int
+                                    handlerOffset = reader.U16() |> int
+                                    handlerLength = reader.U8() |> int
                                 }
-                                let classTokenOrFilterOffset = u32 data 8
+                                let classTokenOrFilterOffset = reader.U32()
                                 (flags, ranges, classTokenOrFilterOffset)
-                        }
+                        ]
                 [
                     for (flags, ranges, classTokenOrFilterOffset) in clauses ->
                         match flags with
                         | 0us ->
                             let token = Tables.tokenOfValue classTokenOrFilterOffset
-                            ExceptionCatch(ranges, token)
+                            ExceptionClause.Catch(ranges, token)
                         | 1us ->
                             let offset = int classTokenOrFilterOffset
-                            ExceptionFilter (ranges, offset)
-                        | 2us -> ExceptionFinally ranges
-                        | 4us -> ExceptionFault ranges
+                            ExceptionClause.Filter(ranges, offset)
+                        | 2us -> ExceptionClause.Finally ranges
+                        | 4us -> ExceptionClause.Fault ranges
                         | _ -> failwith "Invalid exception clause flags."
                 ]
             else
-                List.empty
+                []
         let methodBody : MethodBody = {
             maxStack = maxStack
-            locals = locals
+            localVarSigToken = localVarSigToken
             initLocals = initLocals
             excClauses = excClauses
             instrs = instrs
         }
         methodBody
-
-
