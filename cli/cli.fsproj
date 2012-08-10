@@ -44,10 +44,15 @@
     <Compile Include="PEImageReader.fs" />
     <Compile Include="Flags.fs" />
     <Compile Include="Tables.fs" />
+    <Compile Include="MetadataRef.fs" />
     <Compile Include="Metadata.fs" />
     <Compile Include="ModuleReader.fs" />
+    <Compile Include="SignatureDecoding.fs" />
+    <Compile Include="ModuleLoading.fs" />
     <None Include="test-XEndian.fsx" />
+    <None Include="test-SignatureDecoding.fsx" />
     <None Include="test-PEImageReader.fsx" />
+    <None Include="test-ModuleLoading.fsx" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\FSharp\1.0\Microsoft.FSharp.Targets" Condition="!Exists('$(MSBuildBinPath)\Microsoft.Build.Tasks.v4.0.dll')" />
   <Import Project="$(MSBuildExtensionsPath32)\..\Microsoft F#\v4.0\Microsoft.FSharp.Targets" Condition=" Exists('$(MSBuildBinPath)\Microsoft.Build.Tasks.v4.0.dll')" />

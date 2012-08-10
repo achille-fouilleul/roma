@@ -64,9 +64,9 @@ type Heaps(stringHeapData, userStringHeapData, blobHeapData, guidHeapData, heapS
             let guid =
                 if index <> 0 then
                     let off = (index - 1) * 16
-                    System.Guid(Array.sub guidHeapData off 16)
+                    Guid(Array.sub guidHeapData off 16)
                 else
-                    System.Guid()
+                    Guid()
             guid :> obj
 
     let blobReader =
@@ -274,17 +274,46 @@ type MetadataReader(peImgReader : PEImageReader) =
     let methodSpecTable : MethodSpecRow[] = readTable TableNumber.MethodSpec
     let genericParamConstraintTable : GenericParamConstraintRow[] = readTable TableNumber.GenericParamConstraint
 
-    do if moduleTable.Length <> 1 then
-        failwith "invalid Module table"
-
-    // TODO: other checks
-
     member this.Heaps = heaps
 
     member this.ModuleTable = moduleTable
-    // TODO: other tables
+    member this.TypeRefTable = typeRefTable
+    member this.TypeDefTable = typeDefTable
+    member this.FieldTable = fieldTable
     member this.MethodDefTable = methodDefTable
-    // TODO: other tables
+    member this.ParamTable = paramTable
+    member this.InterfaceImplTable = interfaceImplTable
+    member this.MemberRefTable = memberRefTable
+    member this.ConstantTable = constantTable
+    member this.CustomAttributeTable = customAttributeTable
+    member this.FieldMarshalTable = fieldMarshalTable
+    member this.DeclSecurityTable = declSecurityTable
+    member this.ClassLayoutTable = classLayoutTable
+    member this.FieldLayoutTable = fieldLayoutTable
+    member this.StandAloneSigTable = standAloneSigTable
+    member this.EventMapTable = eventMapTable
+    member this.EventTable = eventTable
+    member this.PropertyMapTable = propertyMapTable
+    member this.PropertyTable = propertyTable
+    member this.MethodSemanticsTable = methodSemanticsTable
+    member this.MethodImplTable = methodImplTable
+    member this.ModuleRefTable = moduleRefTable
+    member this.TypeSpecTable = typeSpecTable
+    member this.ImplMapTable = implMapTable
+    member this.FieldRVATable = fieldRVATable
+    member this.AssemblyTable = assemblyTable
+    member this.AssemblyProcessorTable = assemblyProcessorTable
+    member this.AssemblyOSTable = assemblyOSTable
+    member this.AssemblyRefTable = assemblyRefTable
+    member this.AssemblyRefProcessorTable = assemblyRefProcessorTable
+    member this.AssemblyRefOSTable = assemblyRefOSTable
+    member this.FileTable = fileTable
+    member this.ExportedTypeTable = exportedTypeTable
+    member this.ManifestResourceTable = manifestResourceTable
+    member this.NestedClassTable = nestedClassTable
+    member this.GenericParamTable = genericParamTable
+    member this.MethodSpecTable = methodSpecTable
+    member this.GenericParamConstraintTable = genericParamConstraintTable
 
 type CILReader(peImgReader : PEImageReader) =
     member this.ReadMethodBody(rva) =

@@ -1,5 +1,6 @@
 ﻿namespace Roma.Cli
 
+open System
 open LanguagePrimitives
 
 type Guid = System.Guid
@@ -51,62 +52,55 @@ type SimpleIndexAttribute(tableNumber) =
 type CodedIndex(nTagBits : int, defList : (TableNumber * int) list) =
     let tagMask = (1 <<< nTagBits) - 1
 
-    let decMap = defList |> List.map (fun (x, y) -> (y, x)) |> Map.ofList
+    let decMap = Map.ofList [ for (x, y) in defList -> (y, x) ]
 
-    let encMap = defList |> Map.ofList
+    let encMap = Map.ofList defList
 
     member this.NTagBits = nTagBits
 
-    member this.TableNumbers = seq { for (table, tag) in defList -> table }
+    member this.TableNumbers = seq { for (table, _) in defList -> table }
 
-    member this.Decode(index) =
-        if index = 0 then
+    member this.DecodeOpt(index) =
+        if index = 0u then
             None
         else
-            let table = decMap.[index &&& tagMask]
-            let idx = index >>> nTagBits
-            Some (table, idx)
+            Some(this.Decode(index))
+
+    member this.Decode(index) =
+        if index = 0u then
+            raise(ArgumentException("invalid coded index", "index"))
+        let table = decMap.[int index &&& tagMask]
+        let idx = index >>> nTagBits
+        (table, uint32 idx)
 
     member this.Encode(token) =
         match token with
-        | Some (table, idx) -> (idx <<< nTagBits) ||| encMap.[table]
-        | None -> 0
+        | (_, 0u) -> raise(ArgumentException("invalid token", "token"))
+        | (table, idx) -> (idx <<< nTagBits) ||| uint32 encMap.[table]
+
+    member this.EncodeOpt(tokenOpt) =
+        match tokenOpt with
+        | Some token -> this.Encode(token)
+        | None -> 0u
 
     static member Create nTagBits defList = CodedIndex(nTagBits, defList)
 
-[<AbstractClass>]
-type CodedIndexAttribute() =
-    inherit System.Attribute()
-    abstract CodedIndex : CodedIndex with get
-
-type TypeDefOrRefCodedIndexAttribute() =
-    inherit CodedIndexAttribute()
-
-    static let codedIndex =
+module CodedIndexes =
+    let typeDefOrRef =
         CodedIndex.Create 2 [
             TableNumber.TypeDef, 0
             TableNumber.TypeRef, 1
             TableNumber.TypeSpec, 2
         ]
 
-    override this.CodedIndex with get() = codedIndex
-
-type HasConstantCodedIndexAttribute() =
-    inherit CodedIndexAttribute()
-
-    static let codedIndex =
+    let hasConstant =
         CodedIndex.Create 2 [
             TableNumber.Field, 0
             TableNumber.Param, 1
             TableNumber.Property, 2
         ]
 
-    override this.CodedIndex with get() = codedIndex
-
-type HasCustomAttributeCodedIndexAttribute() =
-    inherit CodedIndexAttribute()
-
-    static let codedIndex =
+    let hasCustomAttribute =
         CodedIndex.Create 5 [
             TableNumber.MethodDef, 0
             TableNumber.Field, 1
@@ -132,35 +126,20 @@ type HasCustomAttributeCodedIndexAttribute() =
             TableNumber.MethodSpec, 21
         ]
 
-    override this.CodedIndex with get() = codedIndex
-
-type HasFieldMarshalCodedIndexAttribute() =
-    inherit CodedIndexAttribute()
-
-    static let codedIndex =
+    let hasFieldMarshal =
         CodedIndex.Create 1 [
             TableNumber.Field, 0
             TableNumber.Param, 1
         ]
 
-    override this.CodedIndex with get() = codedIndex
-
-type HasDeclSecurityCodedIndexAttribute() =
-    inherit CodedIndexAttribute()
-
-    static let codedIndex =
+    let hasDeclSecurity =
         CodedIndex.Create 2 [
             TableNumber.TypeDef, 0
             TableNumber.MethodDef, 1
             TableNumber.Assembly, 2
         ]
 
-    override this.CodedIndex with get() = codedIndex
-
-type MemberRefParentCodedIndexAttribute() =
-    inherit CodedIndexAttribute()
-
-    static let codedIndex =
+    let memberRefParent =
         CodedIndex.Create 3 [
             TableNumber.TypeDef, 0
             TableNumber.TypeRef, 1
@@ -169,68 +148,38 @@ type MemberRefParentCodedIndexAttribute() =
             TableNumber.TypeSpec, 4
         ]
 
-    override this.CodedIndex with get() = codedIndex
-
-type HasSemanticsCodedIndexAttribute() =
-    inherit CodedIndexAttribute()
-
-    static let codedIndex =
+    let hasSemantics =
         CodedIndex.Create 1 [
             TableNumber.Event, 0
             TableNumber.Property, 1
         ]
 
-    override this.CodedIndex with get() = codedIndex
-
-type MethodDefOrRefCodedIndexAttribute() =
-    inherit CodedIndexAttribute()
-
-    static let codedIndex =
+    let methodDefOrRef =
         CodedIndex.Create 1 [
             TableNumber.MethodDef, 0
             TableNumber.MemberRef, 1
         ]
 
-    override this.CodedIndex with get() = codedIndex
-
-type MemberForwardedCodedIndexAttribute() =
-    inherit CodedIndexAttribute()
-
-    static let codedIndex =
+    let memberForwarded =
         CodedIndex.Create 1 [
             TableNumber.Field, 0
             TableNumber.MethodDef, 1
         ]
 
-    override this.CodedIndex with get() = codedIndex
-
-type ImplementationCodedIndexAttribute() =
-    inherit CodedIndexAttribute()
-
-    static let codedIndex =
+    let implementation =
         CodedIndex.Create 2 [
             TableNumber.File, 0
             TableNumber.AssemblyRef, 1
             TableNumber.ExportedType, 2
         ]
 
-    override this.CodedIndex with get() = codedIndex
-
-type CustomAttributeTypeCodedIndexAttribute() =
-    inherit CodedIndexAttribute()
-
-    static let codedIndex =
+    let customAttributeType =
         CodedIndex.Create 3 [
             TableNumber.MethodDef, 2
             TableNumber.MemberRef, 3
         ]
 
-    override this.CodedIndex with get() = codedIndex
-
-type ResolutionScopeCodedIndexAttribute() =
-    inherit CodedIndexAttribute()
-
-    static let codedIndex =
+    let resolutionScope =
         CodedIndex.Create 2 [
             TableNumber.Module, 0
             TableNumber.ModuleRef, 1
@@ -238,20 +187,83 @@ type ResolutionScopeCodedIndexAttribute() =
             TableNumber.TypeRef, 3
         ]
 
-    override this.CodedIndex with get() = codedIndex
-
-type TypeOrMethodDefCodedIndexAttribute() =
-    inherit CodedIndexAttribute()
-
-    static let codedIndex =
+    let typeOrMethodDef =
         CodedIndex.Create 1 [
             TableNumber.TypeDef, 0
             TableNumber.MethodDef, 1
         ]
 
-    override this.CodedIndex with get() = codedIndex
+[<AbstractClass>]
+type CodedIndexAttribute() =
+    inherit System.Attribute()
+    abstract CodedIndex : CodedIndex with get
 
-type Token = TableNumber * int
+type TypeDefOrRefCodedIndexAttribute() =
+    inherit CodedIndexAttribute()
+
+    override this.CodedIndex = CodedIndexes.typeDefOrRef
+
+type HasConstantCodedIndexAttribute() =
+    inherit CodedIndexAttribute()
+
+    override this.CodedIndex = CodedIndexes.hasConstant
+
+type HasCustomAttributeCodedIndexAttribute() =
+    inherit CodedIndexAttribute()
+
+    override this.CodedIndex = CodedIndexes.hasCustomAttribute
+
+type HasFieldMarshalCodedIndexAttribute() =
+    inherit CodedIndexAttribute()
+
+    override this.CodedIndex = CodedIndexes.hasFieldMarshal
+
+type HasDeclSecurityCodedIndexAttribute() =
+    inherit CodedIndexAttribute()
+
+    override this.CodedIndex = CodedIndexes.hasDeclSecurity
+
+type MemberRefParentCodedIndexAttribute() =
+    inherit CodedIndexAttribute()
+
+    override this.CodedIndex = CodedIndexes.memberRefParent
+
+type HasSemanticsCodedIndexAttribute() =
+    inherit CodedIndexAttribute()
+
+    override this.CodedIndex = CodedIndexes.hasSemantics
+
+type MethodDefOrRefCodedIndexAttribute() =
+    inherit CodedIndexAttribute()
+
+    override this.CodedIndex = CodedIndexes.methodDefOrRef
+
+type MemberForwardedCodedIndexAttribute() =
+    inherit CodedIndexAttribute()
+
+    override this.CodedIndex = CodedIndexes.memberForwarded
+
+type ImplementationCodedIndexAttribute() =
+    inherit CodedIndexAttribute()
+
+    override this.CodedIndex = CodedIndexes.implementation
+
+type CustomAttributeTypeCodedIndexAttribute() =
+    inherit CodedIndexAttribute()
+
+    override this.CodedIndex = CodedIndexes.customAttributeType
+
+type ResolutionScopeCodedIndexAttribute() =
+    inherit CodedIndexAttribute()
+
+    override this.CodedIndex = CodedIndexes.resolutionScope
+
+type TypeOrMethodDefCodedIndexAttribute() =
+    inherit CodedIndexAttribute()
+
+    override this.CodedIndex = CodedIndexes.typeOrMethodDef
+
+type Token = TableNumber * uint32
 
 type ModuleRow =
     {
@@ -881,17 +893,17 @@ module Tables =
     let tokenOptOfValue =
         function
         | 0u -> None
-        | (value : uint32) ->
+        | value ->
             let table : TableNumber = EnumOfValue(byte(value >>> 24))
-            let index = int(value &&& 0xffffffu)
-            if index = 0 then
+            let index = value &&& 0xffffffu
+            if index = 0u then
                 failwith "invalid token"
-            Some (table, index)
+            Some(table, index)
 
     let tokenOfValue value =
         match tokenOptOfValue value with
         | Some token -> token
-        | None -> failwith "Null token invalid."
+        | None -> failwith "null token not valid"
 
     let tableNumber (enum : TableNumber) =
         EnumToValue enum |> int
