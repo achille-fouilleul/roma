@@ -103,7 +103,6 @@ let private enumerate i0 xs =
 type private ModuleLoader(pe : PEImageReader) =
     let entryPointToken = Tables.tokenOptOfValue (Option.get pe.CliHeader).entryPointToken
     let md = MetadataReader(pe)
-    let il = CILReader(pe)
 
     let moduleTable = md.ModuleTable
     let typeRefTable = md.TypeRefTable
@@ -339,6 +338,7 @@ type private ModuleLoader(pe : PEImageReader) =
                                     Diagnostics.Debug.WriteLine(sprintf "TODO: unmanaged/native code method: %s" row.Name)
                                     None
                                 else
+                                    let il = CILReader(pe, this)
                                     Some(il.ReadMethodBody(row.Rva))
                             else
                                 None
@@ -636,9 +636,16 @@ type private ModuleLoader(pe : PEImageReader) =
                     yield gp
             |]
 
-    interface IModuleReader with
+    interface IModuleLoader with
         member this.GetTypeRef(token) =
             this.LoadTypeRef(token)
+
+        member this.GetLocalVarSig(tokenOpt) =
+            match tokenOpt with
+            | None -> []
+            | Some(TableNumber.StandAloneSig, index) ->
+                decodeLocalVarSig this standAloneSigTable.[int index - 1].Signature
+            | _ -> failwith "invalid LocalVarSig token."
 
 let loadModule (path : string) : Module =
     let mr = ModuleLoader(PEImageReader(path))

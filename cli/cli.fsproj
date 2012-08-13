@@ -44,10 +44,12 @@
     <Compile Include="PEImageReader.fs" />
     <Compile Include="Flags.fs" />
     <Compile Include="Tables.fs" />
+    <Compile Include="MetadataReader.fs" />
     <Compile Include="MetadataRef.fs" />
     <Compile Include="Metadata.fs" />
-    <Compile Include="ModuleReader.fs" />
+    <Compile Include="IModuleLoader.fs" />
     <Compile Include="SignatureDecoding.fs" />
+    <Compile Include="CILReader.fs" />
     <Compile Include="ModuleLoading.fs" />
     <None Include="test-XEndian.fsx" />
     <None Include="test-SignatureDecoding.fsx" />

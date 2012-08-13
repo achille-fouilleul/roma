@@ -131,6 +131,7 @@ type Marshal =
     | NativeFixedArray of int // non-standard
     | NativeI
     | NativeU
+    | NativeVariantBool // non-standard
     | NativeFunc
     | NativeAsAny // non-standard
     | NativeArray of Marshal option * int option * int option // element type, param index, size

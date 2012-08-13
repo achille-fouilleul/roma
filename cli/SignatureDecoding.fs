@@ -2,10 +2,7 @@
 
 open System
 
-type IModuleReader =
-    abstract member GetTypeRef : Token -> TypeSpec
-
-let private getTypeRefFromCodedIndex (this : IModuleReader) codedIndex =
+let private getTypeRefFromCodedIndex (this : IModuleLoader) codedIndex =
     this.GetTypeRef(CodedIndexes.typeDefOrRef.Decode(codedIndex))
 
 [<Flags>]
@@ -85,7 +82,7 @@ let private decodeArrayShape blob off =
         ]
     List.zip loBounds sizes
 
-let rec decodeTypeSig (mr : IModuleReader) (blob : byte[]) off : TypeSig =
+let rec decodeTypeSig (ml : IModuleLoader) (blob : byte[]) off : TypeSig =
     let hd = blob.[!off]
     off := !off + 1
     match hd with
@@ -103,62 +100,62 @@ let rec decodeTypeSig (mr : IModuleReader) (blob : byte[]) off : TypeSig =
     | 0x0cuy -> TypeSig.R4
     | 0x0duy -> TypeSig.R8
     | 0x0euy -> TypeSig.String
-    | 0x0fuy -> TypeSig.Ptr (decodeTypeSig mr blob off)
-    | 0x10uy -> TypeSig.ByRef (decodeTypeSig mr blob off)
+    | 0x0fuy -> TypeSig.Ptr (decodeTypeSig ml blob off)
+    | 0x10uy -> TypeSig.ByRef (decodeTypeSig ml blob off)
 
     | 0x11uy ->
         decodeCompressedUInt blob off
-        |> getTypeRefFromCodedIndex mr
+        |> getTypeRefFromCodedIndex ml
         |> TypeSig.ValueType
 
     | 0x12uy ->
         decodeCompressedUInt blob off
-        |> getTypeRefFromCodedIndex mr
+        |> getTypeRefFromCodedIndex ml
         |> TypeSig.Class
 
     | 0x13uy -> TypeSig.Var (decodeCompressedUInt blob off |> int)
 
     | 0x14uy ->
-        let typeSig = decodeTypeSig mr blob off
+        let typeSig = decodeTypeSig ml blob off
         let shape = decodeArrayShape blob off
         TypeSig.Array(typeSig, shape)
 
     | 0x15uy ->
-        let genType = decodeTypeSig mr blob off
+        let genType = decodeTypeSig ml blob off
         let genArgCount = decodeCompressedUInt blob off |> int
         let args =
             [
                 for i in 1 .. genArgCount ->
-                    decodeTypeSig mr blob off
+                    decodeTypeSig ml blob off
             ]
         TypeSig.GenericInst(genType, args)
 
     | 0x16uy -> TypeSig.TypedByRef
     | 0x18uy -> TypeSig.I
     | 0x19uy -> TypeSig.U
-    | 0x1buy -> TypeSig.Fnptr (decodeMethodSig mr blob off)
+    | 0x1buy -> TypeSig.Fnptr (decodeMethodSig ml blob off)
     | 0x1cuy -> TypeSig.Object
-    | 0x1duy -> TypeSig.SZArray (decodeTypeSig mr blob off)
+    | 0x1duy -> TypeSig.SZArray (decodeTypeSig ml blob off)
     | 0x1euy -> TypeSig.MVar (decodeCompressedUInt blob off |> int)
 
     | 0x1fuy ->
-        let typeRef = decodeCompressedUInt blob off |> getTypeRefFromCodedIndex mr
-        let typeSig = decodeTypeSig mr blob off
+        let typeRef = decodeCompressedUInt blob off |> getTypeRefFromCodedIndex ml
+        let typeSig = decodeTypeSig ml blob off
         TypeSig.ModReq(typeRef, typeSig)
 
     | 0x20uy ->
-        let typeRef = decodeCompressedUInt blob off |> getTypeRefFromCodedIndex mr
-        let typeSig = decodeTypeSig mr blob off
+        let typeRef = decodeCompressedUInt blob off |> getTypeRefFromCodedIndex ml
+        let typeSig = decodeTypeSig ml blob off
         TypeSig.ModOpt(typeRef, typeSig)
 
     | 0x45uy ->
-        let typeSig = decodeTypeSig mr blob off
+        let typeSig = decodeTypeSig ml blob off
         TypeSig.Pinned typeSig
 
     // TODO
     | _-> raise(NotImplementedException()) // TODO
 
-and decodeMethodSig (mr : IModuleReader) (blob : byte[]) off =
+and decodeMethodSig (ml : IModuleLoader) (blob : byte[]) off =
     let hd = LanguagePrimitives.EnumOfValue blob.[!off]
     off := !off + 1
     let hasThis = (hd &&& Bits.HasThis) <> Bits.Zero
@@ -183,7 +180,7 @@ and decodeMethodSig (mr : IModuleReader) (blob : byte[]) off =
         callKind = callKind
     }
     let paramCount = decodeCompressedUInt blob off
-    let retType = decodeTypeSig mr blob off
+    let retType = decodeTypeSig ml blob off
     let types, varTypes =
         let rec loop types varTypes i =
             if i < paramCount then
@@ -194,10 +191,10 @@ and decodeMethodSig (mr : IModuleReader) (blob : byte[]) off =
                         off := !off + 1
                         loop types (Some List.empty) i
                     | _ ->
-                        let newTypes = (decodeTypeSig mr blob off) :: types
+                        let newTypes = (decodeTypeSig ml blob off) :: types
                         loop newTypes varTypes (i + 1u)
                 | Some vts ->
-                    let newVarTypes = (decodeTypeSig mr blob off) :: vts
+                    let newVarTypes = (decodeTypeSig ml blob off) :: vts
                     loop types (Some newVarTypes) (i + 1u)
             else
                 types, varTypes
@@ -211,23 +208,23 @@ and decodeMethodSig (mr : IModuleReader) (blob : byte[]) off =
     }
     methodSig
 
-let decodeFieldSig (mr : IModuleReader) (blob : byte[]) =
+let decodeFieldSig (ml : IModuleLoader) (blob : byte[]) =
     if blob.[0] <> 0x06uy then
         failwith "Invalid field signature."
     let off = ref 1
-    decodeTypeSig mr blob off
+    decodeTypeSig ml blob off
 
-let decodeMethodSpec (mr : IModuleReader) (blob : byte[]) =
+let decodeMethodSpec (ml : IModuleLoader) (blob : byte[]) =
     if blob.[0] <> 0x0auy then
         failwith "Invalid MethodSpec blob signature."
     let off = ref 1
     let n = decodeCompressedUInt blob off |> Checked.int
     [|
         for i in 1 .. n ->
-            decodeTypeSig mr blob off
+            decodeTypeSig ml blob off
     |]
 
-let decodePropertySig (mr : IModuleReader) (blob : byte[]) =
+let decodePropertySig (ml : IModuleLoader) (blob : byte[]) =
     let hasThis =
         match blob.[0] with
         | 0x08uy -> false
@@ -235,11 +232,11 @@ let decodePropertySig (mr : IModuleReader) (blob : byte[]) =
         | _ -> failwith "Invalid PropertySig blob signature."
     let off = ref 1
     let n = decodeCompressedUInt blob off |> Checked.int
-    let retType = decodeTypeSig mr blob off
+    let retType = decodeTypeSig ml blob off
     let paramTypes =
         [|
             for i in 1 .. n ->
-                decodeTypeSig mr blob off
+                decodeTypeSig ml blob off
         |]
     (hasThis, retType, paramTypes)
 
@@ -337,15 +334,16 @@ let private decodeNativeTypeSigIntrinsic (blob : byte[]) off =
     | 0x14uy -> NativeLpstr
     | 0x15uy -> NativeLpwstr
     | 0x16uy -> NativeLptstr
-    | 0x17uy -> NativeFixedSysString (decodeCompressedUInt blob off |> int)
+    | 0x17uy -> NativeFixedSysString(decodeCompressedUInt blob off |> int)
     | 0x19uy -> NativeIUnknown
     | 0x1auy -> NativeIDispatch
     | 0x1buy -> NativeStruct
     | 0x1cuy -> NativeInterface
     | 0x1duy -> NativeSafeArray
-    | 0x1euy -> NativeFixedArray (decodeCompressedUInt blob off |> int)
+    | 0x1euy -> NativeFixedArray(decodeCompressedUInt blob off |> int)
     | 0x1fuy -> NativeI
     | 0x20uy -> NativeU
+    | 0x25uy -> NativeVariantBool
     | 0x26uy -> NativeFunc
     | 0x28uy -> NativeAsAny
     | 0x2buy -> NativeLpstruct
@@ -354,13 +352,14 @@ let private decodeNativeTypeSigIntrinsic (blob : byte[]) off =
         decodeNativeTypeSigStr blob off |> ignore
         let s1 = decodeNativeTypeSigStr blob off
         let s2 = decodeNativeTypeSigStr blob off
-        NativeCustom (s1, s2)
+        NativeCustom(s1, s2)
     | 0x2duy -> NativeError
-    | _ -> failwith "Invalid native intrinsic."
+    | _ ->
+        failwith "Invalid native intrinsic."
 
 let private decodeNativeTypeSigInt blob off =
     if !off < Array.length blob then
-        Some (decodeCompressedUInt blob off |> int)
+        Some(decodeCompressedUInt blob off |> int)
     else
         None
 
@@ -377,16 +376,16 @@ let decodeMarshal (blob : byte[]) =
             | _ -> Some (decodeNativeTypeSigIntrinsic blob off)
         let m = decodeNativeTypeSigInt blob off
         let n = decodeNativeTypeSigInt blob off
-        NativeArray (elemType, m, n)
+        NativeArray(elemType, m, n)
     else
         decodeNativeTypeSigIntrinsic blob off
 
-let decodeLocalVarSig (mr : IModuleReader) (blob : byte[]) =
+let decodeLocalVarSig ml (blob : byte[]) =
     if blob.[0] <> 0x07uy then
         failwith "Invalid local var signature."
     let off = ref 1
     let count = decodeCompressedUInt blob off
-    [|
+    [
         for i in 1u .. count ->
-            decodeTypeSig mr blob off
-    |]
+            decodeTypeSig ml blob off
+    ]

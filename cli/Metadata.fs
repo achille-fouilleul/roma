@@ -66,14 +66,14 @@ type ExceptionClauseRanges = {
 }
 
 type ExceptionClause =
-    | Catch of ExceptionClauseRanges * Token // TODO: TypeRef
+    | Catch of ExceptionClauseRanges * TypeSpec
     | Filter of ExceptionClauseRanges * int
     | Finally of ExceptionClauseRanges
     | Fault of ExceptionClauseRanges
 
 type MethodBody = {
     maxStack : int
-    localVarSigToken : Token option // TODO: StandAloneSig
+    locals : TypeSig list
     initLocals : bool
     excClauses : ExceptionClause list
     instrs : byte[] // TODO: (int * Instruction) list
