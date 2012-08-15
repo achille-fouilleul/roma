@@ -3,29 +3,6 @@
 open System
 open LittleEndian
 
-type ByteReader(array, index) =
-    let mutable offset = index
-
-    member this.Offset = offset
-
-    member this.U8() =
-        let x = Array.get array offset
-        offset <- offset + 1
-        x
-
-    member this.U16() =
-        let x = u16 array offset
-        offset <- offset + 2
-        x
-
-    member this.U32() =
-        let x = u32 array offset
-        offset <- offset + 4
-        x
-
-    member this.S32() =
-        this.U32() |> int32
-
 type Heaps(stringHeapData, userStringHeapData, blobHeapData, guidHeapData, heapSizes) =
     static let decodeBlob data index =
         match int(Array.get data index) with
@@ -84,10 +61,8 @@ type Heaps(stringHeapData, userStringHeapData, blobHeapData, guidHeapData, heapS
     member this.GuidReader = guidReader
     member this.BlobReader = blobReader
 
-    member this.ReadUserString(token) =
-        if (token &&& 0xff000000u) <> 0x70000000u then
-            raise(ArgumentException "invalid string token")
-        let blob = decodeBlob userStringHeapData (int(token &&& 0xffffffu))
+    member this.ReadUserString(index : uint32) =
+        let blob = decodeBlob userStringHeapData (int index)
         if (blob.Length % 2) <> 0 then
             System.Text.Encoding.Unicode.GetString(blob, 0, blob.Length - 1)
         else

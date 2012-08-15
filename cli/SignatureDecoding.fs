@@ -2,8 +2,13 @@
 
 open System
 
-let private getTypeRefFromCodedIndex (this : IModuleLoader) codedIndex =
-    this.GetTypeRef(CodedIndexes.typeDefOrRef.Decode(codedIndex))
+let private getTypeSpecFromCodedIndex (ml : IModuleLoader) codedIndex =
+    ml.GetTypeRef(CodedIndexes.typeDefOrRef.Decode(codedIndex))
+
+let private getTypeRefFromCodedIndex (ml : IModuleLoader) codedIndex =
+    match getTypeSpecFromCodedIndex ml codedIndex with
+    | TypeSpec.Choice1Of2 typeRef -> typeRef
+    | _ -> failwith "expected TypeRef, got TypeSpec"
 
 [<Flags>]
 type private Bits =
@@ -100,8 +105,8 @@ let rec decodeTypeSig (ml : IModuleLoader) (blob : byte[]) off : TypeSig =
     | 0x0cuy -> TypeSig.R4
     | 0x0duy -> TypeSig.R8
     | 0x0euy -> TypeSig.String
-    | 0x0fuy -> TypeSig.Ptr (decodeTypeSig ml blob off)
-    | 0x10uy -> TypeSig.ByRef (decodeTypeSig ml blob off)
+    | 0x0fuy -> TypeSig.Ptr(decodeTypeSig ml blob off)
+    | 0x10uy -> TypeSig.ByRef(decodeTypeSig ml blob off)
 
     | 0x11uy ->
         decodeCompressedUInt blob off
@@ -219,10 +224,10 @@ let decodeMethodSpec (ml : IModuleLoader) (blob : byte[]) =
         failwith "Invalid MethodSpec blob signature."
     let off = ref 1
     let n = decodeCompressedUInt blob off |> Checked.int
-    [|
+    [
         for i in 1 .. n ->
             decodeTypeSig ml blob off
-    |]
+    ]
 
 let decodePropertySig (ml : IModuleLoader) (blob : byte[]) =
     let hasThis =

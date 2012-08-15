@@ -76,7 +76,7 @@ type MethodBody = {
     locals : TypeSig list
     initLocals : bool
     excClauses : ExceptionClause list
-    instrs : byte[] // TODO: (int * Instruction) list
+    instrs : (int * Instruction) list
 }
 
 type MethodDef = {

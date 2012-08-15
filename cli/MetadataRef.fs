@@ -27,10 +27,6 @@ and TypeRef = {
     typeName : string
 }
 
-and TypeSpec =
-    | TypeSpec_Plain of TypeRef
-    | TypeSpec_GenericInst of TypeRef * TypeSig list
-
 and TypeSig =
     | Boolean
     | Char
@@ -58,11 +54,13 @@ and TypeSig =
     | TypedByRef
     | Var of int
     | Void
-    | ModReq of TypeSpec * TypeSig
-    | ModOpt of TypeSpec * TypeSig
+    | ModReq of TypeRef * TypeSig
+    | ModOpt of TypeRef * TypeSig
     | Pinned of TypeSig
-    | Class of TypeSpec
-    | ValueType of TypeSpec
+    | Class of TypeRef
+    | ValueType of TypeRef
+
+and TypeSpec = Choice<TypeRef, TypeSig>
 
 and MethodSig = {
     callConv : CallConv
@@ -84,7 +82,7 @@ type MethodSpec = {
 }
 
 type FieldRef = {
-    typeRef : TypeSig option
+    typeRef : TypeSpec option
     fieldName : string
     signature : TypeSig
 }

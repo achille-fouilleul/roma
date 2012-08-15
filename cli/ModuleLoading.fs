@@ -228,7 +228,7 @@ type private ModuleLoader(pe : PEImageReader) =
                     typeNamespace = row.TypeNamespace
                     typeName = row.TypeName
                 }
-            Some(TypeSpec_Plain typeRef)
+            Some(TypeSpec.Choice1Of2 typeRef)
         else
             None
 
@@ -271,19 +271,12 @@ type private ModuleLoader(pe : PEImageReader) =
                 typeNamespace = row.TypeNamespace
                 typeName = row.TypeName
             }
-        TypeSpec_Plain typeRef
+        TypeSpec.Choice1Of2 typeRef
 
     member this.LoadTypeRefFromTypeSpecIndex(index) =
         let row = typeSpecTable.[int index - 1]
         let typeSig = decodeTypeSig this row.Signature (ref 0)
-        match typeSig with
-        | GenericInst(typeSpec, args) ->
-            match typeSpec with
-            | TypeSig.Class(TypeSpec_Plain typeRef)
-            | TypeSig.ValueType(TypeSpec_Plain typeRef) ->
-                TypeSpec_GenericInst(typeRef, args)
-            | _ -> failwith "invalid TypeRef"
-        | _ -> failwith "invalid TypeRef"
+        TypeSpec.Choice2Of2 typeSig
 
     member this.LoadInterfaces(typeDefId) =
         getChildren interfaceImplTable (fun row -> row.Class) typeDefId
@@ -531,13 +524,32 @@ type private ModuleLoader(pe : PEImageReader) =
             match token with
             | (TableNumber.MethodDef, index) -> this.LoadMethodRefFromMethodDefIndex(index)
             | (TableNumber.MemberRef, index) -> this.LoadMemberRef(index)
-            | _ -> raise(NotImplementedException(sprintf "%A" token)) // TODO
+            | _ -> failwith "invalid MethodRef token"
         let methodRef : MethodRef = {
             typeRef = owner
             methodName = name
             signature = decodeMethodSig this signature (ref 0)
         }
         methodRef
+
+    member this.LoadMethodSpec(token) =
+        // TODO: memoize
+        let methodRef, args =
+            match token with
+            | (TableNumber.MethodDef, index)
+            | (TableNumber.MemberRef, index) ->
+                this.LoadMethodRef(token), []
+            | (TableNumber.MethodSpec, index) ->
+                let row = methodSpecTable.[int index - 1]
+                let methodRef = this.LoadMethodRef(CodedIndexes.methodDefOrRef.Decode(row.Method))
+                let args = decodeMethodSpec this row.Instantiation
+                methodRef, args
+            | _ -> failwith "invalid MethodSpec token"
+        let methodSpec : MethodSpec = {
+            methodRef = methodRef
+            args = args
+        }
+        methodSpec
 
     member this.LoadMemberRef(index) =
         let row = memberRefTable.[int index - 1]
@@ -559,6 +571,24 @@ type private ModuleLoader(pe : PEImageReader) =
         let owner = this.LoadTypeRefFromTypeDefIndex(ownerIdx)
         let methodDefRow = methodDefTable.[int index - 1]
         (Some owner, methodDefRow.Name, methodDefRow.Signature)
+
+    member this.LoadFieldRef(token) =
+        // TODO: memoize
+        let owner, name, signature =
+            match token with
+            | (TableNumber.Field, index) ->
+                let typeDefIndex = getParent typeDefTable fieldTable (fun row -> row.FieldList) index
+                let row = fieldTable.[int index - 1]
+                let owner = this.LoadTypeRefOptFromTypeDefIndex(typeDefIndex)
+                owner, row.Name, row.Signature
+            | (TableNumber.MemberRef, index) -> this.LoadMemberRef(index)
+            | _ -> failwith "invalid FieldRef token"
+        let fieldRef : FieldRef = {
+            typeRef = owner
+            fieldName = name
+            signature = decodeFieldSig this signature
+        }
+        fieldRef
 
     member this.LoadManifestResourceTable() =
         [
@@ -637,15 +667,34 @@ type private ModuleLoader(pe : PEImageReader) =
             |]
 
     interface IModuleLoader with
+        member this.GetLocalVarSig(token) =
+            match token with
+            | (TableNumber.StandAloneSig, index) ->
+                decodeLocalVarSig this standAloneSigTable.[int index - 1].Signature
+            | _ -> failwith "invalid LocalVarSig token."
+
+        member this.GetUserString(index) =
+            md.Heaps.ReadUserString(index)
+
         member this.GetTypeRef(token) =
             this.LoadTypeRef(token)
 
-        member this.GetLocalVarSig(tokenOpt) =
-            match tokenOpt with
-            | None -> []
-            | Some(TableNumber.StandAloneSig, index) ->
-                decodeLocalVarSig this standAloneSigTable.[int index - 1].Signature
-            | _ -> failwith "invalid LocalVarSig token."
+        member this.GetMemberRef(token) =
+            Diagnostics.Debugger.Break()
+            raise(NotImplementedException()) // -> TypeSpec option * string * byte[]
+
+        member this.GetMethodSpec(token) =
+            this.LoadMethodSpec(token)
+
+        member this.GetMethodSig(token) =
+            match token with
+            | (TableNumber.StandAloneSig, index) ->
+                let row = standAloneSigTable.[int index - 1]
+                decodeMethodSig this row.Signature (ref 0)
+            | _ -> failwith "invalid MethodSig token"
+
+        member this.GetFieldRef(token) =
+            this.LoadFieldRef(token)
 
 let loadModule (path : string) : Module =
     let mr = ModuleLoader(PEImageReader(path))

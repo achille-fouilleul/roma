@@ -27,7 +27,7 @@ type CILReader(peImgReader : PEImageReader, ml : IModuleLoader) =
         let codeRva = rva + off
         let codeBytes = peImgReader.Read(codeRva, codeSize)
         let excRva = (codeRva + codeSize + 3u) &&& ~~~3u
-        let instrs = codeBytes // TODO: decodeInstructions
+        let instrs = Disassembling.decodeInstructions ml codeBytes
         let excClauses =
             if moreSects then
                 let flags = peImgReader.[excRva]
@@ -85,7 +85,7 @@ type CILReader(peImgReader : PEImageReader, ml : IModuleLoader) =
                 []
         let methodBody : MethodBody = {
             maxStack = maxStack
-            locals = ml.GetLocalVarSig(localVarSigToken)
+            locals = Option.fold (fun _ token -> ml.GetLocalVarSig(token)) [] localVarSigToken
             initLocals = initLocals
             excClauses = excClauses
             instrs = instrs

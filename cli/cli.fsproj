@@ -41,14 +41,17 @@
   <ItemGroup>
     <Compile Include="LittleEndian.fs" />
     <Compile Include="BigEndian.fs" />
+    <Compile Include="ByteReader.fs" />
     <Compile Include="PEImageReader.fs" />
     <Compile Include="Flags.fs" />
     <Compile Include="Tables.fs" />
     <Compile Include="MetadataReader.fs" />
     <Compile Include="MetadataRef.fs" />
+    <Compile Include="Instruction.fs" />
     <Compile Include="Metadata.fs" />
     <Compile Include="IModuleLoader.fs" />
     <Compile Include="SignatureDecoding.fs" />
+    <Compile Include="IL.fs" />
     <Compile Include="CILReader.fs" />
     <Compile Include="ModuleLoading.fs" />
     <None Include="test-XEndian.fsx" />
