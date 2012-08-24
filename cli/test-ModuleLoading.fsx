@@ -1,24 +1,29 @@
-﻿#r "bin\Debug\cli.dll"
+﻿#r "bin/Debug/cli.dll"
+#load "Platform.fsx"
 
 open System
 open System.IO
 open System.Text
 open Roma.Cli
 open Roma.Cli.ModuleLoading
+open Roma.Platform
 
-// let rootPath = @"C:\Program Files\Microsoft F#\v4.0\Fsc.exe"
-let rootPath = @"C:\Program Files\Microsoft F#\v4.0\Fsi.exe"
+let fsDir = selectPath @"C:\Program Files\Microsoft F#\v4.0" "/usr/lib/fsharp"
 
-printfn "%s" rootPath
-let rootModule = loadModule rootPath
+let rootPath = Path.Combine(fsDir, "fsc.exe")
+// let rootPath = Path.Combine(fsDir, "fsi.exe")
 
 let asmRefs = System.Collections.Generic.List<_>()
 let asms = System.Collections.Generic.List<_>()
 
-asms.Add(rootModule)
+let loadFromPath path =
+    printfn "%s" path
+    let m = loadModule path
+    asms.Add(m)
+    asmRefs.AddRange(m.assemblyRefs)
+    m
 
-for asmRef in rootModule.assemblyRefs do
-    asmRefs.Add(asmRef)
+let rootModule = loadFromPath rootPath
 
 let isLoaded(asmRef : AssemblyRef) =
     asms |> Seq.exists(
@@ -33,25 +38,22 @@ let toStr(xs : byte[]) =
     buf.ToString()
 
 let resolve(asmRef : AssemblyRef) =
-    let path = Path.Combine(@"C:\Windows\Microsoft.NET\Framework\v4.0.30319", asmRef.name + ".dll")
-    if File.Exists(path) then
-        path
-    else
+    let name = asmRef.name + ".dll"
+    let cliPath = Path.Combine(cliRoot, name)
+    let fsPath = Path.Combine(fsDir, name)
+    match name with
+    | _ when File.Exists(cliPath) -> cliPath
+    | _ when File.Exists(fsPath) -> fsPath
+    | _ ->
         let dir1 = Path.Combine(@"C:\Windows\Microsoft.NET\assembly\GAC_MSIL", asmRef.name)
         let v0, v1, v2, v3 = asmRef.version
         let dir2 = Path.Combine(dir1, sprintf "v%d.%d_%d.%d.%d.%d__%s" v0 v1 v0 v1 v2 v3 (toStr asmRef.publicKeyOrToken))
-        Path.Combine(dir2, asmRef.name + ".dll")
-
-let load asmRef =
-    if not(isLoaded asmRef) then
-        let path = resolve asmRef
-        printfn "%s" path
-        let m = loadModule path
-        asms.Add(m)
-        asmRefs.AddRange(m.assemblyRefs)
+        Path.Combine(dir2, name)
 
 while asmRefs.Count <> 0 do
     let asmRef = asmRefs.[0]
-    load asmRef
+    if not(isLoaded asmRef || asmRef.name = "ISymWrapper") then
+        let path = resolve asmRef
+        loadFromPath path |> ignore
     asmRefs.RemoveAt(0)
 
