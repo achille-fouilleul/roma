@@ -1,7 +1,7 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 11.00
 # Visual Studio 2010
-Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "cli", "cli\cli.fsproj", "{B096BFDD-E194-436A-BD23-60E5AFA7A94B}"
+Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "roma.cli", "roma.cli\roma.cli.fsproj", "{B096BFDD-E194-436A-BD23-60E5AFA7A94B}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
