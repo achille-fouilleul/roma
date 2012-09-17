@@ -17,9 +17,9 @@ type CallConv = {
 }
 
 type TypeResolutionScope =
-    | TypeResolutionScope_TypeRef of TypeSpec
-    | TypeResolutionScope_ModuleRef of string
-    | TypeResolutionScope_AssemblyRef of AssemblyRefRow
+    | TypeRefScope of TypeSpec
+    | ModuleRefScope of string
+    | AssemblyRefScope of AssemblyRefRow
 
 and TypeRef = {
     scope : TypeResolutionScope option
@@ -86,6 +86,8 @@ type FieldRef = {
     fieldName : string
     signature : TypeSig
 }
+
+type MemberRef = Choice<MethodRef, FieldRef>
 
 type Constant =
     | ConstantBool of bool

@@ -263,26 +263,15 @@ let decodeInstructions (mr : IModuleLoader) (codeBytes : byte[]) =
                     | (TableNumber.Field, _) ->
                         Ldtoken_field(mr.GetFieldRef(token))
                     | (TableNumber.MemberRef, _) ->
-                        let (owner, name, sigBlob) = mr.GetMemberRef(token)
-                        match sigBlob.[0] with
-                        | 0x06uy ->
-                            let fieldRef : FieldRef = {
-                                typeRef = owner
-                                fieldName = name
-                                signature = decodeFieldSig mr sigBlob
-                            }
-                            Ldtoken_field fieldRef
-                        | _ ->
+                        match mr.GetMemberRef(token) with
+                        | MemberRef.Choice1Of2 methodRef ->
                             let methodSpec : MethodSpec = {
-                                methodRef =
-                                    {
-                                        typeRef = owner
-                                        methodName = name
-                                        signature = decodeMethodSig mr sigBlob (ref 0)
-                                    }
+                                methodRef = methodRef
                                 args = []
                             }
                             Ldtoken_method methodSpec
+                        | MemberRef.Choice2Of2 fieldRef ->
+                            Ldtoken_field fieldRef
                     | _ -> failwith "invalid token type for ldtoken"
                 | 0xfeuy ->
                     let ext = reader.U8()

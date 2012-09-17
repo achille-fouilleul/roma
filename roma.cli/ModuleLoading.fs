@@ -218,9 +218,9 @@ type private ModuleLoader(pe : PEImageReader) =
             let scope =
                 if isNested row then
                     match getChild nestedClassTable (fun row -> row.NestedClass) index with
-                    | None -> failwith "Enclosing type not found."
+                    | None -> failwith "enclosing type not found"
                     | Some row ->
-                        Some(TypeResolutionScope_TypeRef(this.LoadTypeRefFromTypeDefIndex(row.EnclosingClass)))
+                        Some(TypeRefScope(this.LoadTypeRefFromTypeDefIndex(row.EnclosingClass)))
                 else
                     None
             let typeRef : TypeRef = {
@@ -236,7 +236,12 @@ type private ModuleLoader(pe : PEImageReader) =
         let ownerIdx = getParent typeDefTable methodDefTable (fun row -> row.MethodList) index
         let owner = this.LoadTypeRefOptFromTypeDefIndex(ownerIdx)
         let methodDefRow = methodDefTable.[int index - 1]
-        (owner, methodDefRow.Name, methodDefRow.Signature)
+        let methodRef : MethodRef = {
+            typeRef = owner
+            methodName = methodDefRow.Name
+            signature = decodeMethodSig this methodDefRow.Signature (ref 0)
+        }
+        methodRef
 
     member this.LoadMethodRefFromMemberRefIndex(index) =
         raise(NotImplementedException()) // TODO
@@ -255,16 +260,16 @@ type private ModuleLoader(pe : PEImageReader) =
                 // Implementation must be (File _) or (AssemblyRef _)
                 raise (new System.NotImplementedException())
             | Some(TableNumber.TypeRef, idx) ->
-                Some(TypeResolutionScope_TypeRef(this.LoadTypeRefFromIndex(idx)))
+                Some(TypeRefScope(this.LoadTypeRefFromIndex(idx)))
             | Some(TableNumber.ModuleRef, idx) ->
-                Some(TypeResolutionScope_ModuleRef(moduleRefTable.[int idx - 1].Name))
+                Some(ModuleRefScope(moduleRefTable.[int idx - 1].Name))
             | Some(TableNumber.Module, idx) ->
                 if idx <> 1u then
-                    failwith "Invalid module index."
+                    failwith "invalid module index"
                 None
             | Some(TableNumber.AssemblyRef, idx) ->
-                Some(TypeResolutionScope_AssemblyRef(assemblyRefTable.[int idx - 1]))
-            | _ -> failwith "Invalid ResolutionScope token."
+                Some(AssemblyRefScope(assemblyRefTable.[int idx - 1]))
+            | _ -> failwith "invalid ResolutionScope token"
         let typeRef : TypeRef =
             {
                 scope = scope
@@ -519,17 +524,13 @@ type private ModuleLoader(pe : PEImageReader) =
 
     member this.LoadMethodRef(token) =
         // TODO: memoize
-        let owner, name, signature =
-            match token with
-            | (TableNumber.MethodDef, index) -> this.LoadMethodRefFromMethodDefIndex(index)
-            | (TableNumber.MemberRef, index) -> this.LoadMemberRef(index)
+        match token with
+        | (TableNumber.MethodDef, index) -> this.LoadMethodRefFromMethodDefIndex(index)
+        | (TableNumber.MemberRef, index) ->
+            match this.LoadMemberRefFromIndex(index) with
+            | MemberRef.Choice1Of2 methodRef -> methodRef
             | _ -> failwith "invalid MethodRef token"
-        let methodRef : MethodRef = {
-            typeRef = owner
-            methodName = name
-            signature = decodeMethodSig this signature (ref 0)
-        }
-        methodRef
+        | _ -> failwith "invalid MethodRef token"
 
     member this.LoadMethodSpec(token) =
         // TODO: memoize
@@ -550,7 +551,7 @@ type private ModuleLoader(pe : PEImageReader) =
         }
         methodSpec
 
-    member this.LoadMemberRef(index) =
+    member this.LoadMemberRefFromIndex(index) =
         let row = memberRefTable.[int index - 1]
         let owner =
             match CodedIndexes.memberRefParent.Decode(row.Class) with
@@ -562,8 +563,22 @@ type private ModuleLoader(pe : PEImageReader) =
                 // TODO: check name & signature compatibility
                 owner
             | (TableNumber.TypeSpec, idx) -> Some(this.LoadTypeRefFromTypeSpecIndex(idx))
-            | _ -> failwith "Invalid MemberRef.Class token."
-        (owner, row.Name, row.Signature)
+            | _ -> failwith "invalid MemberRef.Class token"
+        match row.Signature.[0] with
+        | 0x06uy ->
+            let fieldRef : FieldRef = {
+                typeRef = owner
+                fieldName = row.Name
+                signature = decodeFieldSig this row.Signature
+            }
+            MemberRef.Choice2Of2 fieldRef
+        | _ ->
+            let methodRef : MethodRef = {
+                typeRef = owner
+                methodName = row.Name
+                signature = decodeMethodSig this row.Signature (ref 0)
+            }
+            MemberRef.Choice1Of2 methodRef
 
     member this.LoadMethodDefFromIndex(index) =
         let ownerIdx = getParent typeDefTable methodDefTable (fun row -> row.MethodList) index
@@ -573,21 +588,22 @@ type private ModuleLoader(pe : PEImageReader) =
 
     member this.LoadFieldRef(token) =
         // TODO: memoize
-        let owner, name, signature =
-            match token with
-            | (TableNumber.Field, index) ->
-                let typeDefIndex = getParent typeDefTable fieldTable (fun row -> row.FieldList) index
-                let row = fieldTable.[int index - 1]
-                let owner = this.LoadTypeRefOptFromTypeDefIndex(typeDefIndex)
-                owner, row.Name, row.Signature
-            | (TableNumber.MemberRef, index) -> this.LoadMemberRef(index)
+        match token with
+        | (TableNumber.Field, index) ->
+            let typeDefIndex = getParent typeDefTable fieldTable (fun row -> row.FieldList) index
+            let row = fieldTable.[int index - 1]
+            let owner = this.LoadTypeRefOptFromTypeDefIndex(typeDefIndex)
+            let fieldRef : FieldRef = {
+                typeRef = owner
+                fieldName = row.Name
+                signature = decodeFieldSig this row.Signature
+            }
+            fieldRef
+        | (TableNumber.MemberRef, index) ->
+            match this.LoadMemberRefFromIndex(index) with
+            | MemberRef.Choice2Of2 fieldRef -> fieldRef
             | _ -> failwith "invalid FieldRef token"
-        let fieldRef : FieldRef = {
-            typeRef = owner
-            fieldName = name
-            signature = decodeFieldSig this signature
-        }
-        fieldRef
+        | _ -> failwith "invalid FieldRef token"
 
     member this.LoadManifestResourceTable() =
         [
@@ -598,7 +614,7 @@ type private ModuleLoader(pe : PEImageReader) =
                     | None -> None
                     | Some(TableNumber.File, i) -> Some(Implementation_File fileTable.[int i - 1].Name)
                     | Some(TableNumber.AssemblyRef, i) -> Some(Implementation_AssemblyRef assemblyRefTable.[int i - 1])
-                    | _ -> failwith "Invalid ManifestResource.Implementation."
+                    | _ -> failwith "invalid ManifestResource.Implementation"
                 let mresource : ManifestResource = {
                     name = row.Name
                     flags = row.Flags
@@ -635,7 +651,7 @@ type private ModuleLoader(pe : PEImageReader) =
                         match row.Flags with
                         | FileAttributes.ContainsMetaData -> true
                         | FileAttributes.ContainsNoMetaData -> false
-                        | _ -> failwith "Invalid file attributes."
+                        | _ -> failwith "invalid file attributes"
                     hash = row.HashValue
                     customAttrs = this.LoadCustomAttributes(token)
                 }
@@ -651,7 +667,7 @@ type private ModuleLoader(pe : PEImageReader) =
                 for gpi in gpi0 .. gpi1 do
                     let gpRow = genericParamTable.[int gpi]
                     if gpi <> gpi0 + uint32 gpRow.Number then
-                        failwith "Wrong GenericParam number."
+                        failwith "wrong GenericParam number"
                     let gp : GenericParam = {
                         name = gpRow.Name
                         flags = gpRow.Flags
@@ -670,7 +686,7 @@ type private ModuleLoader(pe : PEImageReader) =
             match token with
             | (TableNumber.StandAloneSig, index) ->
                 decodeLocalVarSig this standAloneSigTable.[int index - 1].Signature
-            | _ -> failwith "invalid LocalVarSig token."
+            | _ -> failwith "invalid LocalVarSig token"
 
         member this.GetUserString(index) =
             md.Heaps.ReadUserString(index)
@@ -679,8 +695,9 @@ type private ModuleLoader(pe : PEImageReader) =
             this.LoadTypeRef(token)
 
         member this.GetMemberRef(token) =
-            Diagnostics.Debugger.Break()
-            raise(NotImplementedException()) // -> TypeSpec option * string * byte[]
+            match token with
+            | (TableNumber.MemberRef, index) -> this.LoadMemberRefFromIndex(index)
+            | _ -> failwith "invalid MemberRef token"
 
         member this.GetMethodSpec(token) =
             this.LoadMethodSpec(token)
