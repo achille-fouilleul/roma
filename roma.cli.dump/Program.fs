@@ -26,6 +26,12 @@ type private Writer() =
 let private intToStr (n : int) =
     n.ToString(System.Globalization.CultureInfo.InvariantCulture)
 
+let private fqnToStr ns name =
+    if String.IsNullOrEmpty(ns) then
+        name
+    else
+        ns + "." + name
+
 let private arrayDimsToStr dims =
     dims
     |> Seq.map (
@@ -48,10 +54,7 @@ let rec private typeSpecToStr typeSpec =
         | _ -> failwith "Invalid TypeSpec."
 
 and typeRefToStr typeRef =
-    let name =
-        match typeRef.typeNamespace with
-        | "" -> typeRef.typeName
-        | _ -> typeRef.typeNamespace + "." + typeRef.typeName
+    let name = fqnToStr typeRef.typeNamespace typeRef.typeName
     match typeRef.scope with
     | Some scope -> "[" + resolutionScopeToStr scope + "]" + name
     | None -> name
@@ -134,6 +137,27 @@ let private dumpMethod (w : Writer) (mth : MethodDef) =
     w.Print("name", mth.name)
     w.Print("signature", methodSigToStr mth.signature)
     dumpCustomAttrs w mth.customAttrs
+    if mth.isEntryPoint then
+        w.Print("entryPoint", "true")
+    mth.parameters
+    |> Array.iteri (
+        fun i parmOpt ->
+            match parmOpt with
+            | None -> ()
+            | Some parm ->
+                w.Enter("Parameter[" + intToStr i + "]")
+                w.Print("name", parm.name)
+                dumpCustomAttrs w parm.customAttrs
+                // TODO
+                w.Leave()
+    )
+    match mth.retVal with
+    | None -> ()
+    | Some parm ->
+        w.Enter("ReturnValue")
+        dumpCustomAttrs w parm.customAttrs
+        // TODO
+        w.Leave()
     // TODO
     w.Leave()
 
@@ -153,7 +177,7 @@ let private dumpEvent (w : Writer) (evt : Event) =
 
 let rec private dumpTypeDef (w : Writer) (typeDef : TypeDef) =
     w.Enter("TypeDef")
-    w.Print("name", typeDef.typeNamespace + "." + typeDef.typeName)
+    w.Print("name", fqnToStr typeDef.typeNamespace typeDef.typeName)
     dumpCustomAttrs w typeDef.customAttrs
     match typeDef.baseType with
     | None -> ()
@@ -189,6 +213,7 @@ let main (args : string[]) =
         w.Enter("Assembly")
         w.Print("name", assembly.name)
         w.Print("version", assembly.version.ToString())
+        dumpCustomAttrs w assembly.customAttrs
         // TODO
         w.Leave()
     for assemblyRef in m.assemblyRefs do
