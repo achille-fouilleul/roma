@@ -3,7 +3,7 @@
 open System
 open SignatureDecoding
 
-let getListBounds (table1 : 'a[]) idx (table2 : 'b[]) getIndex =
+let private getListBounds (table1 : 'a[]) idx (table2 : 'b[]) getIndex =
     let row = table1.[int idx - 1]
     let listId0 = getIndex row
     let listId1 =

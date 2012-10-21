@@ -138,3 +138,4 @@ type Marshal =
     | NativeLpstruct // non-standard
     | NativeCustom of string * string // non-standard
     | NativeError // non-standard
+    | NativeNone // non-standard
