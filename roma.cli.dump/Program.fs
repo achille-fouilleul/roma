@@ -32,8 +32,8 @@ let private arrayDimsToStr dims =
         function
         | 0, None -> ""
         | n, None -> intToStr n + "..."
-        | 0, Some m -> "..." + intToStr m
-        | n, Some m -> intToStr n + "..." + intToStr (n + m)
+        | 0, Some m -> intToStr m
+        | n, Some m -> intToStr n + "..." + intToStr (n + m - 1)
     )
     |> String.concat ","
 
@@ -48,7 +48,10 @@ let rec private typeSpecToStr typeSpec =
         | _ -> failwith "Invalid TypeSpec."
 
 and typeRefToStr typeRef =
-    let name = typeRef.typeNamespace + "." + typeRef.typeName
+    let name =
+        match typeRef.typeNamespace with
+        | "" -> typeRef.typeName
+        | _ -> typeRef.typeNamespace + "." + typeRef.typeName
     match typeRef.scope with
     | Some scope -> "[" + resolutionScopeToStr scope + "]" + name
     | None -> name
@@ -75,7 +78,7 @@ and typeSigToStr typeSig =
     | R8 -> "float64"
     | I -> "intptr"
     | U -> "uintptr"
-    | Array(typeSig, dims) -> "[" + arrayDimsToStr dims + "]" + typeSigToStr typeSig // TODO
+    | Array(typeSig, dims) -> "[" + arrayDimsToStr dims + "]" + typeSigToStr typeSig
     | ByRef typeSig -> "&" + typeSigToStr typeSig
     | Fnptr methodSig -> methodSigToStr methodSig
     | GenericInst(typeSig, args) -> genericInstToStr(typeSig, args)
@@ -104,10 +107,25 @@ and genericInstToStr(typeSig, args) =
         typeRefToStr typeRef + "<" + (args |> Seq.map typeSigToStr |> String.concat ", ") + ">"
     | _ -> failwith "Invalid GenericInst."
 
+let private dumpCustomAttr (w : Writer) (ca : CustomAttribute) =
+    w.Enter("CustomAttribute")
+    match ca.methodRef.typeRef with
+    | None -> ()
+    | Some typeRef ->
+        w.Print("type", typeSpecToStr typeRef)
+    // TODO
+    w.Print("value", BitConverter.ToString(ca.value))
+    w.Leave()
+
+let private dumpCustomAttrs (w : Writer) (cas : seq<CustomAttribute>) =
+    for ca in cas do
+        dumpCustomAttr w ca
+
 let private dumpField (w : Writer) (fld : FieldDef) =
     w.Enter("Field")
     w.Print("name", fld.name)
     w.Print("type", typeSigToStr fld.typeSig)
+    dumpCustomAttrs w fld.customAttrs
     // TODO
     w.Leave()
 
@@ -115,24 +133,28 @@ let private dumpMethod (w : Writer) (mth : MethodDef) =
     w.Enter("Method")
     w.Print("name", mth.name)
     w.Print("signature", methodSigToStr mth.signature)
+    dumpCustomAttrs w mth.customAttrs
     // TODO
     w.Leave()
 
 let private dumpProperty (w : Writer) (prop : Property) =
     w.Enter("Property")
     w.Print("name", prop.name)
+    dumpCustomAttrs w prop.customAttrs
     // TODO
     w.Leave()
 
 let private dumpEvent (w : Writer) (evt : Event) =
     w.Enter("Event")
     w.Print("name", evt.name)
+    dumpCustomAttrs w evt.customAttrs
     // TODO
     w.Leave()
 
 let rec private dumpTypeDef (w : Writer) (typeDef : TypeDef) =
     w.Enter("TypeDef")
     w.Print("name", typeDef.typeNamespace + "." + typeDef.typeName)
+    dumpCustomAttrs w typeDef.customAttrs
     match typeDef.baseType with
     | None -> ()
     | Some baseType -> w.Print("baseType", typeSpecToStr baseType)
@@ -156,7 +178,6 @@ let rec private dumpTypeDef (w : Writer) (typeDef : TypeDef) =
 
 [<EntryPoint>]
 let main (args : string[]) =
-    
     let w = Writer()
     let m = ModuleLoading.loadModule args.[0]
     w.Enter("Module")
@@ -176,6 +197,7 @@ let main (args : string[]) =
         w.Print("version", assemblyRef.version.ToString())
         // TODO
         w.Leave()
+    dumpCustomAttrs w m.customAttrs
     for typeDef in m.typeDefs do
         dumpTypeDef w typeDef
     for fld in m.fields do
