@@ -23,6 +23,8 @@ type private Writer() =
         stack <- List.tail stack
         this.Print("}")
 
+    member this.Level = List.length stack - 1
+
 let private intToStr (n : int) =
     n.ToString(System.Globalization.CultureInfo.InvariantCulture)
 
@@ -112,10 +114,8 @@ and genericInstToStr(typeSig, args) =
 
 let private dumpCustomAttr (w : Writer) (ca : CustomAttribute) =
     w.Enter("CustomAttribute")
-    match ca.methodRef.typeRef with
-    | None -> ()
-    | Some typeRef ->
-        w.Print("type", typeSpecToStr typeRef)
+    ca.methodRef.typeRef
+    |> Option.iter (fun typeRef -> w.Print("type", typeSpecToStr typeRef))
     // TODO
     w.Print("value", BitConverter.ToString(ca.value))
     w.Leave()
@@ -142,22 +142,24 @@ let private dumpMethod (w : Writer) (mth : MethodDef) =
     mth.parameters
     |> Array.iteri (
         fun i parmOpt ->
-            match parmOpt with
-            | None -> ()
-            | Some parm ->
-                w.Enter("Parameter[" + intToStr i + "]")
-                w.Print("name", parm.name)
-                dumpCustomAttrs w parm.customAttrs
-                // TODO
-                w.Leave()
+            parmOpt
+            |>  Option.iter (
+                fun parm ->
+                    w.Enter("Parameter[" + intToStr i + "]")
+                    w.Print("name", parm.name)
+                    dumpCustomAttrs w parm.customAttrs
+                    // TODO
+                    w.Leave()
+            )
     )
-    match mth.retVal with
-    | None -> ()
-    | Some parm ->
-        w.Enter("ReturnValue")
-        dumpCustomAttrs w parm.customAttrs
-        // TODO
-        w.Leave()
+    mth.retVal
+    |> Option.iter (
+        fun parm ->
+            w.Enter("ReturnValue")
+            dumpCustomAttrs w parm.customAttrs
+            // TODO
+            w.Leave()
+    )
     // TODO
     w.Leave()
 
@@ -175,6 +177,13 @@ let private dumpEvent (w : Writer) (evt : Event) =
     // TODO
     w.Leave()
 
+let private methodRefToStr (mthRef : MethodRef) =
+    // TODO
+    let name = mthRef.methodName
+    match mthRef.typeRef with
+    | None -> name
+    | Some typeRef -> typeSpecToStr typeRef + "." + name
+
 let rec private dumpTypeDef (w : Writer) (typeDef : TypeDef) =
     w.Enter("TypeDef")
     w.Print("name", fqnToStr typeDef.typeNamespace typeDef.typeName)
@@ -189,6 +198,18 @@ let rec private dumpTypeDef (w : Writer) (typeDef : TypeDef) =
         w.Leave()
     for nestedType in typeDef.nestedTypes do
         dumpTypeDef w nestedType
+    if not(List.isEmpty typeDef.interfaces) then
+        w.Enter("Interfaces")
+        for intf in typeDef.interfaces do
+            w.Print(typeSpecToStr intf)
+        w.Leave()
+    for decl, body in typeDef.overrides do
+        w.Enter("Override")
+        w.Print("declaration", methodRefToStr decl)
+        w.Print("body", methodRefToStr body)
+        w.Leave()
+    Option.iter (fun classSize -> w.Print("classSize", intToStr classSize)) typeDef.classSize
+    Option.iter (fun packingSize -> w.Print("packingSize", intToStr packingSize)) typeDef.packingSize
     for fld in typeDef.fields do
         dumpField w fld
     for mth in typeDef.methods do
@@ -207,15 +228,16 @@ let main (args : string[]) =
     w.Enter("Module")
     w.Print("mvid", m.moduleGuid.ToString("B"))
     w.Print("name", m.moduleName)
-    match m.assembly with
-    | None -> ()
-    | Some assembly ->
-        w.Enter("Assembly")
-        w.Print("name", assembly.name)
-        w.Print("version", assembly.version.ToString())
-        dumpCustomAttrs w assembly.customAttrs
-        // TODO
-        w.Leave()
+    m.assembly
+    |> Option.iter (
+        fun assembly ->
+            w.Enter("Assembly")
+            w.Print("name", assembly.name)
+            w.Print("version", assembly.version.ToString())
+            dumpCustomAttrs w assembly.customAttrs
+            // TODO
+            w.Leave()
+    )
     for assemblyRef in m.assemblyRefs do
         w.Enter("AssemblyRef")
         w.Print("name", assemblyRef.name)
@@ -231,4 +253,5 @@ let main (args : string[]) =
         dumpMethod w mth
     // TODO
     w.Leave()
+    assert(w.Level = 0)
     0
