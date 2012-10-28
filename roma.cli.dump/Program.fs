@@ -10,7 +10,7 @@ let private parseArgs (args : string[]) =
             let p = arg.IndexOf(':')
             let name, value =
                 if p < 0 then
-                    arg, null
+                    arg.[1 .. ], null
                 else
                     arg.[1 .. p - 1], arg.[p + 1 .. ]
             match name with

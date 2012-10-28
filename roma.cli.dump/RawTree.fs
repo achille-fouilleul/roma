@@ -221,7 +221,7 @@ let rec private dumpTypeDef (w : Writer) (typeDef : TypeDef) =
     // TODO
     w.Leave()
 
-let dump m =
+let dump (m : Module) =
     let w = Writer()
     w.Enter("Module")
     w.Print("mvid", m.moduleGuid.ToString("B"))
