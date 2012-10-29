@@ -62,7 +62,11 @@ and private typeRefToStr varMap byRefDir typeRef =
     match typeRef.scope with
     | Some(TypeRefScope enclosingTypeRef) ->
         (typeSpecToStr varMap byRefDir enclosingTypeRef) + "." + typeRef.typeName
-    | _ -> typeRef.typeNamespace + "." + typeRef.typeName
+    | _ ->
+        if typeRef.typeNamespace.Length <> 0 then
+            typeRef.typeNamespace + "." + typeRef.typeName
+        else
+            typeRef.typeName
 
 and private typeSigToStr (varMap : GenVarMap) byRefDir typeSig =
     match typeSig with
@@ -90,7 +94,10 @@ and private typeSigToStr (varMap : GenVarMap) byRefDir typeSig =
         | None -> "ref " + typeStr // TODO: warn
         | Some OutOnly -> "out " + typeStr
         | Some InOut -> "ref " + typeStr
-    // | Fnptr of MethodSig -> TODO
+    | Fnptr methodSig ->
+        let retTypeStr = typeSigToStr varMap None methodSig.retType
+        let paramTypes = Seq.map (typeSigToStr varMap None) methodSig.paramTypes
+        "__fnptr(" + retTypeStr + "(" + String.concat ", " paramTypes + ")" // TODO: calling convention
     | GenericInst(typeSig, args) ->
         let name = typeSigToStr varMap byRefDir typeSig
         let expectedSuffix = "`" + intToStr(List.length args)
@@ -110,16 +117,32 @@ and private typeSigToStr (varMap : GenVarMap) byRefDir typeSig =
     | Var n -> varMap.Var(n)
     | Void -> "void"
     | ModReq(custMod, typeSig) ->
+        let typeStr = typeSigToStr varMap byRefDir typeSig
         match typeRefToStr varMap None custMod with
-        | "System.Runtime.CompilerServices.IsVolatile" -> "volatile " + typeSigToStr varMap byRefDir typeSig
+        | "System.Runtime.CompilerServices.IsByValue" -> "__byvalue " + typeStr // C++/CLI
+        | "System.Runtime.CompilerServices.IsImplicitlyDereferenced" -> "__implicitlydereferenced " + typeStr // C++/CLI
+        | "System.Runtime.CompilerServices.IsUdtReturn" -> "__udtreturn " + typeStr // C++/CLI
+        | "System.Runtime.CompilerServices.IsVolatile" -> "volatile " + typeStr
         | _ ->
             Diagnostics.Debugger.Break()
-            failwith "unsupported custom modifier"
-    // | ModOpt of TypeRef * TypeSig -> TODO
+            raise(NotImplementedException())
+    | ModOpt(custMod, typeSig) ->
+        let typeStr = typeSigToStr varMap byRefDir typeSig
+        match typeRefToStr varMap None custMod with
+        | "System.Runtime.CompilerServices.CallConvStdcall" -> "__stdcall " + typeStr // C++/CLI
+        | "System.Runtime.CompilerServices.IsConst" -> "__const " + typeStr // C++/CLI
+        | "System.Runtime.CompilerServices.IsExplicitlyDereferenced" -> "__interior_ptr<" + typeStr + ">" // C++/CLI
+        | "System.Runtime.CompilerServices.IsImplicitlyDereferenced" -> "__implicitlydereferenced " + typeStr // C++/CLI
+        | "System.Runtime.CompilerServices.IsLong" -> "__long " + typeStr // C++/CLI
+        | _ -> 
+            Diagnostics.Debugger.Break()
+            raise(NotImplementedException()) // TODO
     // | Pinned of TypeSig -> TODO
     | Class typeRef -> typeRefToStr varMap byRefDir typeRef
     | ValueType typeRef -> typeRefToStr varMap byRefDir typeRef
-    | _ -> Diagnostics.Debugger.Break(); raise(NotImplementedException()) // TODO
+    | _ ->
+        Diagnostics.Debugger.Break()
+        raise(NotImplementedException()) // TODO
 
 type private Writer() =
     let mutable level = 0
@@ -195,6 +218,15 @@ let private dumpMethod w varMap ownerTypeName (mth : MethodDef) =
     let genMvars = [| for p in mth.genericParams -> p.name |]
     let genVarMap = { varMap with mvars = genMvars }
     dumpAttrs w genVarMap mth.customAttrs
+
+    // TODO: other attributes (e.g. pinvokes, etc.)
+
+    mth.retVal |> Option.iter (
+        fun (par : ParamDef) ->
+            for attr in par.customAttrs do
+                w.Print("[return: " + attrToStr genVarMap attr + "]")
+    )
+
     let xs = Collections.Generic.List<string>()
 
     match mth.flags &&& MethodAttributes.MemberAccessMask with
@@ -225,7 +257,10 @@ let private dumpMethod w varMap ownerTypeName (mth : MethodDef) =
         else
             mth.name
     // TODO: gen param constraints (where %s : %s ...)
-    // TODO: attributes (retval, params)
+    // TODO: retval attributes
+    // TODO: vararg methods (__arglist)
+    // TODO: C# params keyword (ParamArrayAttribute)
+    // TODO: C# unsafe keyword if pointers involved
     let retTypeStr = typeSigToStr genVarMap None mth.signature.retType
     let pars = seq {
         for typeSig, parOpt in Seq.zip mth.signature.paramTypes mth.parameters ->
@@ -239,9 +274,16 @@ let private dumpMethod w varMap ownerTypeName (mth : MethodDef) =
                     | _ -> None
                 ) parOpt
             let typeStr = typeSigToStr genVarMap byRefDir typeSig
-            match parOpt with
-            | None -> typeStr
-            | Some par -> typeStr + " " + par.name
+            seq {
+                match parOpt with
+                | None -> yield typeStr
+                | Some par ->
+                    for attr in par.customAttrs do
+                        yield "[" + attrToStr genVarMap attr + "]"
+                    yield typeStr
+                    yield par.name
+            }
+            |> String.concat " "
     }
     let paramsStr =  "(" + String.concat ", " pars + ")"
     match mth.name with
@@ -253,7 +295,7 @@ let private dumpMethod w varMap ownerTypeName (mth : MethodDef) =
         w.Print(String.concat " " xs)
     | "Finalize" when true (* TODO: non-generic, return type = void, no parameters... *) ->
         w.Print("~" + ownerTypeName)
-    | _ ->
+    | _ -> // TODO: operators
         xs.Add(retTypeStr)
         xs.Add(name + paramsStr + ";")
         w.Print(String.concat " " xs)
@@ -361,7 +403,7 @@ let rec private dumpType (w : Writer) (typeDef : TypeDef) (nestingStack : TypeDe
             for intf in typeDef.interfaces do
                 yield typeSpecToStr varMap None intf
         | TKEnum -> // TODO
-            let f = typeDef.fields |> Seq.find (fun field -> LanguagePrimitives.EnumToValue(field.flags &&& FieldAttributes.Static) = 0us)
+            let f = typeDef.fields |> Seq.find (fun field -> field.name = "value__" && (field.flags &&& FieldAttributes.SpecialName) = FieldAttributes.SpecialName)
             if f.typeSig <> TypeSig.I4 then
                 yield typeSigToStr varMap None f.typeSig
         | TKClass ->
@@ -379,6 +421,8 @@ let rec private dumpType (w : Writer) (typeDef : TypeDef) (nestingStack : TypeDe
         header.Add(": " + (String.concat ", " inheritanceList))
 
     // TODO: generic param constraints (where %s : %s ...)
+
+    // TODO: special processing for interfaces, enums, delegates
 
     w.Print((String.concat " " header) + " {")
     w.Enter()
@@ -411,3 +455,4 @@ let dump (m : Module) =
             w.Leave()
             w.Print("}")
         w.Print()
+    // TODO: global fields & methods

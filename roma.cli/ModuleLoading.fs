@@ -582,9 +582,9 @@ type private ModuleLoader(pe : PEImageReader) =
 
     member this.LoadMethodDefFromIndex(index) =
         let ownerIdx = getParent typeDefTable methodDefTable (fun row -> row.MethodList) index
-        let owner = this.LoadTypeRefFromTypeDefIndex(ownerIdx)
+        let owner = this.LoadTypeRefOptFromTypeDefIndex(ownerIdx)
         let methodDefRow = methodDefTable.[int index - 1]
-        (Some owner, methodDefRow.Name, methodDefRow.Signature)
+        (owner, methodDefRow.Name, methodDefRow.Signature)
 
     member this.LoadFieldRef(token) =
         // TODO: memoize

@@ -348,6 +348,7 @@ let private decodeNativeTypeSigIntrinsic (blob : byte[]) off =
     | 0x1euy -> NativeFixedArray(decodeCompressedUInt blob off |> int)
     | 0x1fuy -> NativeI
     | 0x20uy -> NativeU
+    | 0x22uy -> NativeByvalstr
     | 0x25uy -> NativeVariantBool
     | 0x26uy -> NativeFunc
     | 0x28uy -> NativeAsAny
