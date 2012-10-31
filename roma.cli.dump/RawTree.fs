@@ -1,6 +1,7 @@
 ﻿module Roma.Cli.Dump.RawTree
 
 open Roma.Cli
+open Internal.StrUtil
 
 [<Literal>]
 let private Indent = " "
@@ -24,9 +25,6 @@ type private Writer() =
         this.Print("}")
 
     member this.Level = List.length stack - 1
-
-let private intToStr (n : int) =
-    n.ToString(System.Globalization.CultureInfo.InvariantCulture)
 
 let private fqnToStr ns name =
     if System.String.IsNullOrEmpty(ns) then
@@ -221,7 +219,7 @@ let rec private dumpTypeDef (w : Writer) (typeDef : TypeDef) =
     // TODO
     w.Leave()
 
-let dump (m : Module) =
+let dump refs (m : Module) =
     let w = Writer()
     w.Enter("Module")
     w.Print("mvid", m.moduleGuid.ToString("B"))

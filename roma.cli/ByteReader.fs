@@ -12,10 +12,16 @@ type ByteReader(array, index) =
         offset <- offset + 1
         x
 
+    member this.S8() =
+        this.U8() |> int8
+
     member this.U16() =
         let x = u16 array offset
         offset <- offset + 2
         x
+
+    member this.S16() =
+        this.U16() |> int16
 
     member this.U32() =
         let x = u32 array offset

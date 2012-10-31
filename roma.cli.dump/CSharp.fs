@@ -2,197 +2,50 @@
 
 open System
 open Roma.Cli
-
-let private intToStr (n : int) =
-    n.ToString(System.Globalization.CultureInfo.InvariantCulture)
+open Internal.StrUtil
+open Internal.CSharp.TypeToStr
+open Internal.CSharp.CustomAttrToStr
 
 let private constantToStr constant =
     match constant with
     | ConstantBool false -> "false"
     | ConstantBool true -> "true"
     | ConstantBytearray bytes -> raise(NotImplementedException()) // TODO
-    | ConstantChar value ->
-        match char value with
-        | '\'' -> "'\\''"
-        | '\t' -> "'\\t'"
-        | '\n' -> "'\\n'"
-        | '\r' -> "'\\r'"
-        | c -> sprintf "'%c'" c // TODO: escape special chars
+    | ConstantChar value -> char value |> charToCSharpStr
     | ConstantR4 0xffc00000u -> "0.0f / 0.0f" // NaN
     | ConstantR4 0x7f800000u -> "1.0f / 0.0f" // +inf
     | ConstantR4 0xff800000u -> "-1.0f / 0.0f" // -inf
     | ConstantR4 value ->
-        sprintf "%gf" (BitConverter.ToSingle(BitConverter.GetBytes(value), 0))
+        (BitConverter.ToSingle(BitConverter.GetBytes(value), 0)).ToString("r", ic) + "f"
     | ConstantR8 0xfff8000000000000UL -> "0.0 / 0.0" // NaN
     | ConstantR8 0x7ff0000000000000UL -> "1.0 / 0.0" // +inf
     | ConstantR8 0xfff0000000000000UL -> "-1.0 / 0.0" // -inf
     | ConstantR8 value ->
-        sprintf "%g" (BitConverter.ToDouble(BitConverter.GetBytes(value), 0))
-    | ConstantI1 value -> sprintf "%d" value
-    | ConstantU1 value -> sprintf "%u" value
-    | ConstantI2 value -> sprintf "%d" value
-    | ConstantU2 value -> sprintf "%u" value
-    | ConstantI4 value -> sprintf "%d" value
-    | ConstantU4 value -> sprintf "%uU" value
-    | ConstantI8 value -> sprintf "%dL" value
-    | ConstantU8 value -> sprintf "%dUL" value
-    | ConstantString s -> "\"" + s + "\"" // TODO: escape special chars
+        (BitConverter.ToDouble(BitConverter.GetBytes(value), 0)).ToString("r", ic)
+    | ConstantI1 value -> value.ToString(ic)
+    | ConstantU1 value -> value.ToString(ic)
+    | ConstantI2 value -> value.ToString(ic)
+    | ConstantU2 value -> value.ToString(ic)
+    | ConstantI4 value -> value.ToString(ic)
+    | ConstantU4 value -> value.ToString(ic) + "U"
+    | ConstantI8 value -> value.ToString(ic) + "L"
+    | ConstantU8 value -> value.ToString(ic) + "UL"
+    | ConstantString s -> strToCSharpStr s
     | ConstantNullRef -> "null"
 
-type private GenVarMap =
-    {
-        vars : string[]
-        mvars : string[]
-    }
-
-    member this.Var(n) = this.vars.[n]
-
-    member this.MVar(n) = this.mvars.[n]
-
-type private ByRefDir =
-    | OutOnly
-    | InOut
-
-let rec private typeSpecToStr varMap byRefDir typeSpec =
-    match typeSpec with
-    | TypeSpec.Choice1Of2 typeRef -> typeRefToStr varMap byRefDir typeRef
-    | TypeSpec.Choice2Of2 typeSig -> typeSigToStr varMap byRefDir typeSig
-
-and private typeRefToStr varMap byRefDir typeRef =
-    match typeRef.scope with
-    | Some(TypeRefScope enclosingTypeRef) ->
-        (typeSpecToStr varMap byRefDir enclosingTypeRef) + "." + typeRef.typeName
-    | _ ->
-        if typeRef.typeNamespace.Length <> 0 then
-            typeRef.typeNamespace + "." + typeRef.typeName
-        else
-            typeRef.typeName
-
-and private typeSigToStr (varMap : GenVarMap) byRefDir typeSig =
-    match typeSig with
-    | Boolean -> "bool"
-    | Char -> "char"
-    | I1 -> "sbyte"
-    | U1 -> "byte"
-    | I2 -> "short"
-    | U2 -> "ushort"
-    | I4 -> "int"
-    | U4 -> "uint"
-    | I8 -> "long"
-    | U8 -> "ulong"
-    | R4 -> "float"
-    | R8 -> "double"
-    | I -> "System.IntPtr"
-    | U -> "System.UIntPtr"
-    | Array(typeSig, dims) ->
-        if not(List.forall (fun dim -> dim = (0, None)) dims) then
-            failwith "unsupported array shape"
-        typeSigToStr varMap byRefDir typeSig + "[" + (String.replicate (List.length dims - 1) ",") + "]"
-    | ByRef typeSig ->
-        let typeStr = typeSigToStr varMap None typeSig
-        match byRefDir with
-        | None -> "ref " + typeStr // TODO: warn
-        | Some OutOnly -> "out " + typeStr
-        | Some InOut -> "ref " + typeStr
-    | Fnptr methodSig ->
-        let retTypeStr = typeSigToStr varMap None methodSig.retType
-        let paramTypes = Seq.map (typeSigToStr varMap None) methodSig.paramTypes
-        "__fnptr(" + retTypeStr + "(" + String.concat ", " paramTypes + ")" // TODO: calling convention
-    | GenericInst(typeSig, args) ->
-        let name = typeSigToStr varMap byRefDir typeSig
-        let expectedSuffix = "`" + intToStr(List.length args)
-        let shortName =
-            if name.EndsWith(expectedSuffix) then
-                name.[0 .. name.Length - expectedSuffix.Length - 1]
-            else
-                // TODO: warn about missing suffix
-                name
-        shortName + "<" + (args |> Seq.map (typeSigToStr varMap byRefDir) |> String.concat ", ") + ">"
-    | MVar n -> varMap.MVar(n)
-    | Object -> "object"
-    | Ptr typeSig -> typeSigToStr varMap byRefDir typeSig + "*"
-    | String -> "string"
-    | SZArray typeSig -> typeSigToStr varMap byRefDir typeSig + "[]"
-    | TypedByRef -> "System.TypedReference"
-    | Var n -> varMap.Var(n)
-    | Void -> "void"
-    | ModReq(custMod, typeSig) ->
-        let typeStr = typeSigToStr varMap byRefDir typeSig
-        match typeRefToStr varMap None custMod with
-        | "System.Runtime.CompilerServices.IsByValue" -> "__byvalue " + typeStr // C++/CLI
-        | "System.Runtime.CompilerServices.IsImplicitlyDereferenced" -> "__implicitlydereferenced " + typeStr // C++/CLI
-        | "System.Runtime.CompilerServices.IsUdtReturn" -> "__udtreturn " + typeStr // C++/CLI
-        | "System.Runtime.CompilerServices.IsVolatile" -> "volatile " + typeStr
-        | _ ->
-            Diagnostics.Debugger.Break()
-            raise(NotImplementedException())
-    | ModOpt(custMod, typeSig) ->
-        let typeStr = typeSigToStr varMap byRefDir typeSig
-        match typeRefToStr varMap None custMod with
-        | "System.Runtime.CompilerServices.CallConvStdcall" -> "__stdcall " + typeStr // C++/CLI
-        | "System.Runtime.CompilerServices.IsConst" -> "__const " + typeStr // C++/CLI
-        | "System.Runtime.CompilerServices.IsExplicitlyDereferenced" -> "__interior_ptr<" + typeStr + ">" // C++/CLI
-        | "System.Runtime.CompilerServices.IsImplicitlyDereferenced" -> "__implicitlydereferenced " + typeStr // C++/CLI
-        | "System.Runtime.CompilerServices.IsLong" -> "__long " + typeStr // C++/CLI
-        | _ -> 
-            Diagnostics.Debugger.Break()
-            raise(NotImplementedException()) // TODO
-    // | Pinned of TypeSig -> TODO
-    | Class typeRef -> typeRefToStr varMap byRefDir typeRef
-    | ValueType typeRef -> typeRefToStr varMap byRefDir typeRef
-    | _ ->
-        Diagnostics.Debugger.Break()
-        raise(NotImplementedException()) // TODO
-
-type private Writer() =
-    let mutable level = 0
-    let output = Console.Out
-    let err = Console.Error
-
-    member this.Enter() =
-        level <- level + 1
-
-    member this.Leave() =
-        assert(level > 0)
-        level <- level - 1
-
-    member this.Print() =
-        output.WriteLine()
-
-    member this.Print(s : string) = 
-        output.WriteLine((String.replicate level " ") + s)
-
-    member this.Warn(s : string) =
-        err.WriteLine(s)
-
-let private attrToStr varMap (attr : CustomAttribute) =
-    if attr.methodRef.methodName <> ".ctor" then
-        raise(NotSupportedException())
-    match attr.methodRef.typeRef with
-    | None -> raise(NotSupportedException())
-    | Some typeSpec ->
-        let name = typeSpecToStr varMap None typeSpec
-        let suffix = "Attribute"
-        let shortName =
-            if name.EndsWith(suffix) then
-                name.[0 .. name.Length - suffix.Length - 1]
-            else
-                name
-        shortName // TODO: arguments
-
-let private dumpAttrs (w : Writer) varMap (attrs : seq<CustomAttribute>) =
+let private dumpAttrs (w : Writer) resolveTypeRef varMap (attrs : seq<CustomAttribute>) =
     for attr in attrs do
-        w.Print("[" + attrToStr varMap attr + "]")
+        w.Print("[" + attrToStr resolveTypeRef varMap attr + "]")
 
-let private dumpField (w : Writer) varMap (fld : FieldDef) =
-    dumpAttrs w varMap fld.customAttrs
+let private dumpField (w : Writer) resolveTypeRef varMap (fld : FieldDef) =
+    dumpAttrs w resolveTypeRef varMap fld.customAttrs
     // TODO: attributes
     let xs = Collections.Generic.List<string>()
 
     match fld.flags &&& FieldAttributes.FieldAccessMask with
     | FieldAttributes.CompilerControlled -> xs.Add("__compilercontrolled") // TODO: warn; not supported in C#
     | FieldAttributes.Private -> if false then xs.Add("private")
-    | FieldAttributes.FamANDAssem -> () // TODO: warn; not supported in C#
+    | FieldAttributes.FamANDAssem -> xs.Add("__famandassem") // TODO: warn; not supported in C#
     | FieldAttributes.Assembly -> xs.Add("internal")
     | FieldAttributes.Family -> xs.Add("protected")
     | FieldAttributes.FamORAssem -> xs.Add("protected internal")
@@ -214,17 +67,17 @@ let private dumpField (w : Writer) varMap (fld : FieldDef) =
         xs.Add("= " + (constantToStr constant))
     w.Print((String.concat " " xs) + ";")
 
-let private dumpMethod w varMap ownerTypeName (mth : MethodDef) =
+let private dumpMethod w resolveTypeRef varMap ownerTypeName (mth : MethodDef) =
     let genMvars = [| for p in mth.genericParams -> p.name |]
     let genVarMap = { varMap with mvars = genMvars }
-    dumpAttrs w genVarMap mth.customAttrs
+    dumpAttrs w resolveTypeRef genVarMap mth.customAttrs
 
     // TODO: other attributes (e.g. pinvokes, etc.)
 
     mth.retVal |> Option.iter (
         fun (par : ParamDef) ->
             for attr in par.customAttrs do
-                w.Print("[return: " + attrToStr genVarMap attr + "]")
+                w.Print("[return: " + attrToStr resolveTypeRef genVarMap attr + "]")
     )
 
     let xs = Collections.Generic.List<string>()
@@ -232,7 +85,7 @@ let private dumpMethod w varMap ownerTypeName (mth : MethodDef) =
     match mth.flags &&& MethodAttributes.MemberAccessMask with
     | MethodAttributes.CompilerControlled -> xs.Add("__compilercontrolled") // TODO: warn; not supported in C#
     | MethodAttributes.Private -> if false then xs.Add("private")
-    | MethodAttributes.FamANDAssem -> () // TODO: warn; not supported in C#
+    | MethodAttributes.FamANDAssem -> xs.Add("__famandassem") // TODO: warn; not supported in C#
     | MethodAttributes.Assem -> xs.Add("internal")
     | MethodAttributes.Family -> xs.Add("protected")
     | MethodAttributes.FamORAssem -> xs.Add("protected internal")
@@ -279,7 +132,7 @@ let private dumpMethod w varMap ownerTypeName (mth : MethodDef) =
                 | None -> yield typeStr
                 | Some par ->
                     for attr in par.customAttrs do
-                        yield "[" + attrToStr genVarMap attr + "]"
+                        yield "[" + attrToStr resolveTypeRef genVarMap attr + "]"
                     yield typeStr
                     yield par.name
             }
@@ -299,6 +152,7 @@ let private dumpMethod w varMap ownerTypeName (mth : MethodDef) =
         xs.Add(retTypeStr)
         xs.Add(name + paramsStr + ";")
         w.Print(String.concat " " xs)
+    // TODO: method body
 
 type private TypeKind =
     | TKInterface
@@ -307,7 +161,7 @@ type private TypeKind =
     | TKDelegate
     | TKClass
 
-let rec private dumpType (w : Writer) (typeDef : TypeDef) (nestingStack : TypeDef list) =
+let rec private dumpType (w : Writer) resolveTypeRef (typeDef : TypeDef) (nestingStack : TypeDef list) =
     // TODO: built-in attributes
     let header = Collections.Generic.List<string>()
     match typeDef.flags &&& TypeAttributes.VisibilityMask with
@@ -340,6 +194,7 @@ let rec private dumpType (w : Writer) (typeDef : TypeDef) (nestingStack : TypeDe
                 TKClass
             match typeDef.baseType with
             | Some(TypeSpec.Choice1Of2 typeRef) ->
+                // TODO: better check (i.e. not only name-based)
                 match typeRef.typeNamespace, typeRef.typeName with
                 | "System", "Enum" ->
                     if not(isSealed && not isAbstract) then
@@ -363,7 +218,7 @@ let rec private dumpType (w : Writer) (typeDef : TypeDef) (nestingStack : TypeDe
     let genVars = [| for p in typeDef.genericParams -> p.name |]
     let varMap : GenVarMap = { vars = genVars; mvars = null }
 
-    dumpAttrs w varMap typeDef.customAttrs
+    dumpAttrs w resolveTypeRef varMap typeDef.customAttrs
 
     match nestingStack with
     | [] -> ()
@@ -403,13 +258,15 @@ let rec private dumpType (w : Writer) (typeDef : TypeDef) (nestingStack : TypeDe
             for intf in typeDef.interfaces do
                 yield typeSpecToStr varMap None intf
         | TKEnum -> // TODO
-            let f = typeDef.fields |> Seq.find (fun field -> field.name = "value__" && (field.flags &&& FieldAttributes.SpecialName) = FieldAttributes.SpecialName)
-            if f.typeSig <> TypeSig.I4 then
-                yield typeSigToStr varMap None f.typeSig
+            match enumUnderlyingType typeDef with
+            | I4 -> ()
+            | typeSig ->
+                yield typeSigToStr varMap None typeSig
         | TKClass ->
             match typeDef.baseType with
             | None -> ()
             | Some typeSpec ->
+                // TODO: better check (i.e. not only name-based)
                 let name = typeSpecToStr varMap None typeSpec
                 if name <> "System.Object" then
                     yield name
@@ -427,32 +284,63 @@ let rec private dumpType (w : Writer) (typeDef : TypeDef) (nestingStack : TypeDe
     w.Print((String.concat " " header) + " {")
     w.Enter()
     for nestedType in typeDef.nestedTypes do
-        dumpType w nestedType (typeDef :: nestingStack)
+        dumpType w resolveTypeRef nestedType (typeDef :: nestingStack)
     for fld in typeDef.fields do
-        dumpField w varMap fld
+        dumpField w resolveTypeRef varMap fld
     for mth in typeDef.methods do
-        dumpMethod w varMap simpleName mth
+        dumpMethod w resolveTypeRef varMap simpleName mth
     // TODO: properties, events
     w.Leave()
     w.Print("}")
 
-let dump (m : Module) =
+let private findTypeDef (m : Module) (typeRef : TypeRef) =
+    m.typeDefs
+    |> Seq.find (
+        fun typeDef ->
+            (typeDef.typeNamespace, typeDef.typeName) = (typeRef.typeNamespace, typeRef.typeName)
+    )
+
+let dump refs (m : Module) =
     let w = Writer()
+
+    let rec resolveTypeRef typeRef =
+        // TODO: performance: use Maps
+        match typeRef.scope with
+        | None -> findTypeDef m typeRef
+        | Some(TypeRefScope(TypeSpec.Choice1Of2 enclosingTypeRef)) ->
+            let enclosingTypeDef = resolveTypeRef enclosingTypeRef
+            enclosingTypeDef.nestedTypes
+            |> Seq.find (fun typeDef -> typeDef.typeName = typeRef.typeName)
+        | Some(AssemblyRefScope assemblyRef) ->
+            let _, m =
+                refs
+                |> Seq.find (
+                    fun (path, m) ->
+                        match m.assembly with
+                        | Some a when a.name = assemblyRef.Name -> true // TODO: better check
+                        | _ -> false
+                )
+            findTypeDef m typeRef
+        | Some(_) ->
+            Diagnostics.Debugger.Break()
+            raise(NotImplementedException()) // TODO
+
     let genVarMap : GenVarMap = { vars = Array.empty; mvars = Array.empty }
     for attr in m.customAttrs do
-        w.Print("[module: " + attrToStr genVarMap attr + "]")
+        w.Print("[module: " + attrToStr resolveTypeRef genVarMap attr + "]")
     m.assembly |> Option.iter (fun asm ->
         for attr in asm.customAttrs do
-            w.Print("[assembly: " + attrToStr genVarMap attr + "]")
+            w.Print("[assembly: " + attrToStr resolveTypeRef genVarMap attr + "]")
     )
     for typeDef in m.typeDefs do
         let nens = typeDef.typeNamespace.Length <> 0
         if nens then
             w.Print(sprintf "namespace %s {" typeDef.typeNamespace)
             w.Enter()
-        dumpType w typeDef []
+        dumpType w resolveTypeRef typeDef []
         if nens then
             w.Leave()
             w.Print("}")
         w.Print()
     // TODO: global fields & methods
+    

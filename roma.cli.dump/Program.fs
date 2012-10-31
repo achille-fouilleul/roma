@@ -5,6 +5,7 @@ open Roma.Cli
 let private parseArgs (args : string[]) =
     let mutable path = null
     let mutable syntax = None
+    let refs = System.Collections.Generic.List<_>()
     for arg in args do
         if arg.StartsWith("-") then
             let p = arg.IndexOf(':')
@@ -23,21 +24,29 @@ let private parseArgs (args : string[]) =
                     | "csharp" -> CSharp.dump
                     | _ -> failwithf "Unknown syntax '%s'." value
                     |> Some
-            | _ -> failwithf "Unknown option '%s'." value
+            | "r" ->
+                refs.Add(value)
+            | _ -> failwithf "Unknown option '%s'." name
         else
             if path <> null then
                 failwith "Multiple paths specified."
             path <- arg
     if path = null then
         failwith "No path specified."
-    path, (Option.fold (fun _ s -> s) RawTree.dump syntax)
+    path, (Option.fold (fun _ s -> s) RawTree.dump syntax), List.ofSeq refs
 
 [<EntryPoint>]
 let main (args : string[]) =
     try
-        let path, syntax = parseArgs args
-        ModuleLoading.loadModule path
-        |> syntax
+        let path, syntax, refPaths = parseArgs args
+        let m = ModuleLoading.loadModule path
+        let refs =
+            [
+                yield (path, m)
+                for refPath in refPaths ->
+                    (refPath, ModuleLoading.loadModule refPath)
+            ]
+        syntax refs m
         0
     with e ->
         System.Console.Error.WriteLine(e.Message)
