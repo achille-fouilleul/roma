@@ -29,6 +29,33 @@ type Writer() =
     member this.Warn(s : string) =
         err.WriteLine(s)
 
+type CharReader(s : string) =
+    let mutable i = 0
+
+    member this.Offset = i
+
+    member this.Peek() =
+        if i < s.Length then
+            Some s.[i]
+        else
+            None
+
+    member this.Read() =
+        match this.Peek() with
+        | None -> None
+        | x ->
+            this.Advance()
+            x
+
+    member this.Advance() =
+        i <- i + 1
+
+let utor32 (value : uint32) =
+    BitConverter.ToSingle(BitConverter.GetBytes(value), 0)
+
+let utor64 (value : uint64) =
+    BitConverter.ToDouble(BitConverter.GetBytes(value), 0)
+
 // C#-specific
 
 let private escapeChar c =
@@ -51,3 +78,17 @@ let strToCSharpStr s =
         else
             String.collect (fun c -> if c = '"' then "\\\"" else escapeChar c) s
     "\"" + s' + "\""
+
+let float32ToCSharpStr (value : uint32) =
+    match value with
+    | 0xffc00000u -> "0.0f / 0.0f" // NaN
+    | 0x7f800000u -> "1.0f / 0.0f" // +inf
+    | 0xff800000u -> "-1.0f / 0.0f" // -inf
+    | _ -> (utor32 value).ToString("r", ic) + "f"
+
+let float64ToCSharpStr (value : uint64) =
+    match value with
+    | 0xfff8000000000000UL -> "0.0 / 0.0" // NaN
+    | 0x7ff0000000000000UL -> "1.0 / 0.0" // +inf
+    | 0xfff0000000000000UL -> "-1.0 / 0.0" // -inf
+    | _ -> (utor64 value).ToString("r", ic)

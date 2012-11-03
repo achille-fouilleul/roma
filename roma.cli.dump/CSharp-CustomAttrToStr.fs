@@ -5,6 +5,65 @@ open Roma.Cli
 open Internal.StrUtil
 open Internal.CSharp.TypeToStr
 
+let private isValueType (typeDef : TypeDef) =
+    match typeDef.baseType with
+    | None -> false
+    | Some(TypeSpec.Choice1Of2 typeRef) ->
+        // TODO: check scope = mscorlib
+        match typeRef.typeName, typeRef.typeNamespace with
+        | "System", "Enum" -> true
+        | "System", "ValueType" when (typeDef.typeNamespace, typeDef.typeName) <> ("System", "Enum") -> true
+        | _ -> false
+    | Some(TypeSpec.Choice2Of2 _) -> false
+
+let private typeRefToTypeSig resolveTypeRef typeRef =
+    let typeDef = resolveTypeRef typeRef
+    if isValueType typeDef then
+        TypeSig.ValueType typeRef
+    else
+        TypeSig.Class typeRef
+
+type private CAType =
+    | Boolean
+    | Char
+    | I1
+    | U1
+    | I2
+    | U2
+    | I4
+    | U4
+    | I8
+    | U8
+    | R4
+    | R8
+    | String
+    | SZArray of CAType
+    | TypeRef
+    | Boxed
+    | Enum of TypeRef
+
+let private nullGenVarMap : GenVarMap = { vars = null; mvars = null }
+
+let rec private caTypeToStr resolveTypeRef caType =
+    match caType with
+    | Boolean -> "bool"
+    | Char -> "char"
+    | I1 -> "sbyte"
+    | U1 -> "byte"
+    | I2 -> "short"
+    | U2 -> "ushort"
+    | I4 -> "int"
+    | U4 -> "uint"
+    | I8 -> "long"
+    | U8 -> "ulong"
+    | R4 -> "float"
+    | R8 -> "double"
+    | String -> "string"
+    | SZArray elemType -> caTypeToStr resolveTypeRef elemType + "[]"
+    | TypeRef -> "System.Type"
+    | Boxed -> "object"
+    | Enum typeRef -> typeRefToStr resolveTypeRef nullGenVarMap None typeRef
+
 let private decodePackedLen (r : ByteReader) =
     let x0 = uint32(r.U8())
     match x0 with
@@ -45,112 +104,447 @@ let private parseBlob (s : string) =
             (c0 <<< 4) ||| c1
     |]
 
-let private parseTypeRef (typeStr : string) =
-    // TODO: improve type parsing
-    let xs = typeStr.Split([| ", " |], StringSplitOptions.None)
-    let fqn = xs.[0]
+let private parseFqn (r : CharReader) =
+    let buf = Text.StringBuilder()
+    let rec loop() =
+        match r.Peek() with
+        | Some c
+            // TODO: handle escaping
+            when (c >= '0' && c <= '9') ||
+                (c >= 'A' && c <= 'Z') ||
+                (c >= 'a' && c <= 'z') ||
+                c = '.' ||
+                c ='`' ||
+                c = '_' ->
+            r.Advance()
+            buf.Append(c) |> ignore
+            loop()
+        | _ -> buf.ToString()
+    let fqn = loop()
     let p = fqn.LastIndexOf('.')
-    let ns, name =
-        if p < 0 then
-            null, fqn
-        else
-            fqn.[.. p - 1], fqn.[p + 1 ..]
+    if p < 0 then
+        "", fqn
+    else
+        fqn.[.. p - 1], fqn.[p + 1 ..]
 
-    let scope =
-        if xs.Length = 1 then
-            None
-        else
-            let mutable assemblyRef : AssemblyRefRow =
-                {
-                    MajorVersion = 0us
-                    MinorVersion = 0us
-                    BuildNumber = 0us
-                    RevisionNumber = 0us
-                    Flags = LanguagePrimitives.EnumOfValue 0u
-                    PublicKeyOrToken = null
-                    Name = xs.[1]
-                    Culture = null
-                    HashValue = null
-                }
-            for x in xs.[2.. ] do
-                let p = x.IndexOf('=')
-                if p < 0 then
-                    failwith "Invalid type name."
-                let name, value = x.[.. p - 1], x.[p + 1 ..]
-                match name with
-                | "Version" ->
-                    let vs = value.Split('.') |> Array.map uint16
-                    // TODO: check number of elements
-                    assemblyRef <- { assemblyRef with MajorVersion = vs.[0]; MinorVersion = vs.[1]; BuildNumber = vs.[2]; RevisionNumber = vs.[3] }
-                | "Culture" ->
-                    assemblyRef <- { assemblyRef with Culture = if value = "neutral" then null else value }
-                | "PublicKeyToken" ->
-                    assemblyRef <- { assemblyRef with Flags = assemblyRef.Flags &&& ~~~AssemblyFlags.PublicKey; PublicKeyOrToken = parseBlob value }
-                | _ ->
-                    Diagnostics.Debugger.Break()
-                    raise(NotImplementedException()) // TODO
-            Some(AssemblyRefScope assemblyRef)
+let private error r =
+    failwith "Invalid type name."
 
-    { scope = scope; typeNamespace = ns; typeName = name }
+let rec private skipWhitespace (r : CharReader) =
+    match r.Peek() with
+    | Some ' ' ->
+        r.Advance()
+        skipWhitespace r
+    | _ -> ()
 
-let rec private decodeFieldOrPropType (r : ByteReader) =
-    let x = r.U8()
-    match x with
-    | 0x02uy -> TypeSig.Boolean
-    | 0x03uy -> TypeSig.Char
-    | 0x04uy -> TypeSig.I1
-    | 0x05uy -> TypeSig.U1
-    | 0x06uy -> TypeSig.I2
-    | 0x07uy -> TypeSig.U2
-    | 0x08uy -> TypeSig.I4
-    | 0x09uy -> TypeSig.U4
-    | 0x0auy -> TypeSig.I8
-    | 0x0buy -> TypeSig.U8
-    | 0x0cuy -> TypeSig.R4
-    | 0x0duy -> TypeSig.R8
-    | 0x0euy -> TypeSig.String
-    | 0x1duy -> TypeSig.SZArray(decodeFieldOrPropType r)
-    | 0x55uy ->
-        let typeStr = decodeSerString r
-        TypeSig.ValueType(parseTypeRef typeStr)
-    | _ -> failwith "Invalid FieldOrPropType."
+let parseTypeName (r : CharReader) =
+    let buf = Text.StringBuilder()
+    let rec loop() =
+        match r.Peek() with
+        // TODO: extensive check, escaping
+        | Some c
+            when c >= '0' && c <= '9' ||
+                c >= 'A' && c <= 'Z' ||
+                c >= 'a' && c <= 'z' ||
+                c = '_' ||
+                c = '`' ->
+            r.Advance()
+            buf.Append(c) |> ignore
+            loop()
+        | _ -> buf.ToString()
+    loop()
 
-let private decodeFixedArg resolveTypeRef typeSig (r : ByteReader) =
-    let decodeSimple typeSig =
-        match typeSig with
-        | Boolean ->
-            match r.U8() with
-            | 0uy -> "false"
-            | 1uy -> "true"
-            | _ -> failwith "Invalid boolean value."
-        | I1 -> r.S8().ToString(ic)
-        | U1 -> r.U8().ToString(ic)
-        | I2 -> r.S16().ToString(ic)
-        | U2 -> r.U16().ToString(ic)
-        | I4 -> r.S32().ToString(ic)
-        | U4 -> r.U32().ToString(ic) + "U"
-        | I8 -> r.S64().ToString(ic) + "L"
-        | U8 -> r.U64().ToString(ic) + "UL"
-        | String -> decodeSerString r |> strToCSharpStr
+let rec parseKV (r : CharReader) =
+
+    let nameBuf = Text.StringBuilder()
+
+    let rec loop() =
+        match r.Peek() with
+        | Some c when c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' ->
+            r.Advance()
+            nameBuf.Append(c) |> ignore
+            loop()
+        | _ -> nameBuf.ToString()
+
+    let name = loop()
+
+    match r.Peek() with
+    | Some '=' ->
+        r.Advance()
+
+        let valueBuf = Text.StringBuilder()
+
+        let rec loop() =
+            match r.Peek() with
+            | Some ',' ->
+                r.Advance()
+                skipWhitespace r
+                valueBuf.ToString()
+            | Some ']'
+            | None ->
+                valueBuf.ToString()
+            | Some c ->
+                r.Advance()
+                valueBuf.Append(c) |> ignore
+                loop()
+
+        let value = loop()
+
+        Some(name, value)
+
+    | _ ->
+        if name.Length <> 0 then
+            error r
+        None
+        
+let private parseAssemblyRef (r : CharReader) =
+
+    let buf = Text.StringBuilder()
+
+    // TODO: handle escaping
+    let rec loop() =
+        match r.Peek() with
+        | None -> ()
+        | Some ',' ->
+            r.Advance()
+            skipWhitespace r
+        | Some c ->
+            r.Advance()
+            buf.Append(c) |> ignore
+            loop()
+    loop()
+
+    let name = buf.ToString()
+
+    let mutable assemblyRef : AssemblyRefRow =
+        {
+            MajorVersion = 0us
+            MinorVersion = 0us
+            BuildNumber = 0us
+            RevisionNumber = 0us
+            Flags = LanguagePrimitives.EnumOfValue 0u
+            PublicKeyOrToken = null
+            Name = name
+            Culture = null
+            HashValue = null
+        }
+
+    let kvs =
+        Seq.unfold (
+            fun() ->
+                Option.map (fun kv -> kv, ()) (parseKV r)
+        ) ()
+
+    for name, value in kvs do
+        match name with
+        | "Version" ->
+            let vs = value.Split('.') |> Array.map uint16
+            if vs.Length <> 4 then
+                error r
+            assemblyRef <- { assemblyRef with MajorVersion = vs.[0]; MinorVersion = vs.[1]; BuildNumber = vs.[2]; RevisionNumber = vs.[3] }
+        | "Culture" ->
+            assemblyRef <- { assemblyRef with Culture = if value = "neutral" then null else value }
+        | "PublicKeyToken" ->
+            assemblyRef <- { assemblyRef with Flags = assemblyRef.Flags &&& ~~~AssemblyFlags.PublicKey; PublicKeyOrToken = parseBlob value }
         | _ ->
             Diagnostics.Debugger.Break()
-            raise(NotImplementedException()) // TODO: float, char
+            raise(NotImplementedException()) // TODO
 
+    assemblyRef
+
+(*
+let private splitList n xs =
+    let rec loop i list1 list2 =
+        if i < n then
+            match list2 with
+            | [] -> failwith "Too few arguments in generic type instantitiation."
+            | hd :: tl ->
+                let list1' = hd :: list1
+                let list2' = tl
+                loop (i + 1) list1' list2'
+        else
+            list1, list2
+    let list1, list2 = loop 0 [] xs
+    List.rev list1, list2
+
+let private genTypeInst resolveTypeRef typeSpec args =
+    let rec walkSpec typeSpec args =
+        match typeSpec with
+        | TypeSpec.Choice1Of2 typeRef -> walkRef typeRef args
+        | _ ->
+            // typeSpec, args, None
+            Diagnostics.Debugger.Break()
+            raise(NotImplementedException()) // TODO
+    and walkRef typeRef args =
+        let typeRef, typeDef =
+            match typeRef.scope with
+            | Some(TypeRefScope typeSpec) ->
+                let typeSpec', args', (typeDef : TypeDef) = walkSpec typeSpec args
+                let typeRef' = { typeRef with scope = Some(TypeRefScope typeSpec') }
+                let typeDef' =
+                    typeDef.nestedTypes
+                    |> Seq.find (fun typeDef -> typeDef.typeName = typeRef.typeName)
+                typeRef', typeDef'
+            | _ -> 
+                let (typeDef : TypeDef) = resolveTypeRef typeRef
+                typeRef, typeDef
+
+        let n = typeDef.genericParams.Length
+        if n <> 0 then
+            let genType =
+                if isValueType typeDef then
+                    TypeSig.ValueType typeRef
+                else
+                    TypeSig.Class typeRef
+            let genArgs, args' = splitList n args
+            TypeSpec.Choice2Of2(TypeSig.GenericInst(genType, genArgs)), args', typeDef
+        else
+            TypeSpec.Choice1Of2 typeRef, args, typeDef
+
+    let typeSpec', args', typeDef = walkSpec typeSpec args
+    if not(List.isEmpty args') then
+        failwith "Invalid generic type instance."
+    typeSpec'
+*)
+
+let private parseTypeSpec resolveTypeRef (s : string) =
+    let r = CharReader(s)
+
+    let rec parseArg() =
+        match r.Peek() with
+        | Some '[' ->
+            r.Advance()
+            let arg = parse true
+            match r.Read() with
+            | Some ']' -> arg
+            | _ -> error r
+        | _ ->
+            parse false
+
+    // TODO: improve type parsing
+    and parse withScope =
+        let ns, name = parseFqn r
+
+        let typeNesting =
+            let rec loop f =
+                match r.Peek() with
+                | Some '+' ->
+                    r.Advance()
+                    let name = parseTypeName r
+                    loop (fun typeRef ->
+                        let typeSpec = TypeSpec.Choice1Of2(f typeRef)
+                        let typeRef' : TypeRef =
+                            {
+                                scope = Some(TypeRefScope typeSpec)
+                                typeNamespace = null
+                                typeName = name
+                            }
+                        typeRef'
+                    )
+                | _ -> f
+            loop id
+
+        let args =
+            match r.Peek() with
+            | Some '[' ->
+                r.Advance()
+
+                let args = Collections.Generic.List<_>()
+
+                // parse first argument
+                args.Add(parseArg())
+
+                // parse other arguments
+                let rec loop() =
+                    match r.Peek() with
+                    | Some ',' ->
+                        r.Advance()
+                        skipWhitespace r
+                        args.Add(parseArg())
+                        loop()
+                    | Some ']' ->
+                        r.Advance()
+                    | _ -> error r
+
+                loop()
+
+                List.ofSeq args
+
+            | _ -> []
+
+        let scope =
+            if withScope then
+                match r.Peek() with
+                | Some ',' ->
+                    r.Advance()
+                    skipWhitespace r
+                    let assemblyRef = parseAssemblyRef r
+                    Some(AssemblyRefScope assemblyRef)
+                | _ -> None
+            else
+                None
+
+        let typeRef : TypeRef =
+            {
+                scope = scope
+                typeNamespace = ns
+                typeName = name
+            }
+
+        let typeRef' = typeNesting typeRef
+
+        match args with
+        | [] -> TypeSpec.Choice1Of2 typeRef'
+        | _ ->
+            let genTypeSig = typeRefToTypeSig resolveTypeRef typeRef'
+            let genTypeArgs =
+                [
+                    for arg in args ->
+                        match arg with
+                        | TypeSpec.Choice1Of2 typeRef -> typeRefToTypeSig resolveTypeRef typeRef
+                        | TypeSpec.Choice2Of2 typeSig -> typeSig
+                ]
+            TypeSpec.Choice2Of2(GenericInst(genTypeSig, genTypeArgs))
+
+    let typeSpec = parse true
+    if r.Offset <> s.Length then
+        error r
+    typeSpec
+
+let invalidFieldOrPropType() =
+    failwith "Invalid FieldOrPropType."
+
+let rec private decodeFieldOrPropType resolveTypeRef (r : ByteReader) =
+    let x = r.U8()
+    match x with
+    | 0x02uy -> Boolean
+    | 0x03uy -> Char
+    | 0x04uy -> I1
+    | 0x05uy -> U1
+    | 0x06uy -> I2
+    | 0x07uy -> U2
+    | 0x08uy -> I4
+    | 0x09uy -> U4
+    | 0x0auy -> I8
+    | 0x0buy -> U8
+    | 0x0cuy -> R4
+    | 0x0duy -> R8
+    | 0x0euy -> String
+    | 0x1duy -> SZArray(decodeFieldOrPropType resolveTypeRef r)
+    | 0x50uy -> TypeRef
+    | 0x51uy -> Boxed
+    | 0x55uy ->
+        let typeSpec =
+            decodeSerString r
+            |> parseTypeSpec resolveTypeRef
+        match typeSpec with
+        | TypeSpec.Choice1Of2 typeRef -> Enum typeRef
+        | _ -> invalidFieldOrPropType()
+    | _ -> invalidFieldOrPropType()
+
+let private typeSigToCAType typeSig =
     match typeSig with
-    | Boolean | I1 | U1 | I2 | U2 | I4 | U4 | I8 | U8 | String -> decodeSimple typeSig // TODO: float, char
-    | Class typeRef
-        // TODO: check that scope is system library
-        when (typeRef.typeNamespace, typeRef.typeName) = ("System", "Type") ->
-        "typeof(" + decodeSerString r + ")" // TODO: remove cruft
-    | ValueType typeRef ->
-        let name = typeRefToStr { vars = null; mvars = null} None typeRef
-        let typeDef = resolveTypeRef typeRef
-        let typeSig = enumUnderlyingType typeDef
-        let s = decodeSimple typeSig
-        "(" + name + ")" + s
-    | _ ->
-        Diagnostics.Debugger.Break()
-        raise(NotImplementedException()) // TODO
+    | TypeSig.Boolean -> Some Boolean
+    | TypeSig.Char -> Some Char
+    | TypeSig.I1 -> Some I1
+    | TypeSig.U1 -> Some U1
+    | TypeSig.I2 -> Some I2
+    | TypeSig.U2 -> Some U2
+    | TypeSig.I4 -> Some I4
+    | TypeSig.U4 -> Some U4
+    | TypeSig.I8 -> Some I8
+    | TypeSig.U8 -> Some U8
+    | TypeSig.R4 -> Some R4
+    | TypeSig.R8 -> Some R8
+    | TypeSig.String -> Some String
+    | _ -> None
+
+let rec private decodeElement resolveTypeRef caType (r : ByteReader) =
+    match caType with
+    | Boolean ->
+        match r.U8() with
+        | 0uy -> "false"
+        | 1uy -> "true"
+        | _ -> failwith "Invalid boolean value."
+    | Char -> r.U16() |> char |> charToCSharpStr
+    | I1 -> r.S8().ToString(ic)
+    | U1 -> r.U8().ToString(ic)
+    | I2 -> r.S16().ToString(ic)
+    | U2 -> r.U16().ToString(ic)
+    | I4 -> r.S32().ToString(ic)
+    | U4 -> r.U32().ToString(ic) + "U"
+    | I8 -> r.S64().ToString(ic) + "L"
+    | U8 -> r.U64().ToString(ic) + "UL"
+    | R4 -> r.U32() |> float32ToCSharpStr
+    | R8 -> r.U64() |> float64ToCSharpStr
+    | String -> decodeSerString r |> strToCSharpStr
+    | SZArray elemType ->
+        let n = r.U32()
+        if n = 0xffffffffu then
+            "null"
+        else
+            let args =
+                seq {
+                    for i in 1u .. n ->
+                        decodeElement resolveTypeRef elemType r
+                }
+                |> String.concat ", "
+            "new " + caTypeToStr resolveTypeRef elemType + "[] { " + args + " }"
+    | TypeRef ->
+        let s =
+            decodeSerString r
+            |> parseTypeSpec resolveTypeRef
+            |> typeSpecToStr resolveTypeRef nullGenVarMap None
+        "typeof(" + s + ")"
+    | Boxed ->
+        let caType = decodeFieldOrPropType resolveTypeRef r
+        decodeElement resolveTypeRef caType r
+    | Enum typeRef ->
+        decodeEnumElement resolveTypeRef typeRef r
+
+and private decodeEnumElement resolveTypeRef typeRef r =
+    let name = typeRefToStr resolveTypeRef nullGenVarMap None typeRef
+    let caTypeOpt =
+        resolveTypeRef typeRef
+        |> enumUnderlyingType
+        |> typeSigToCAType
+    match caTypeOpt with
+    | None -> failwith "Invalid underlying enum type."
+    | Some caType -> "(" + name + ")" + decodeElement resolveTypeRef caType r
+
+let rec private decodeFixedArg resolveTypeRef (typeSig : TypeSig) (r : ByteReader) =
+    match typeSigToCAType typeSig with
+    | Some caType -> decodeElement resolveTypeRef caType r
+    | None ->
+        match typeSig with
+        | TypeSig.Class typeRef
+            // TODO: check that scope is system library
+            when (typeRef.typeNamespace, typeRef.typeName) = ("System", "Type") ->
+            let s =
+                decodeSerString r
+                |> parseTypeSpec resolveTypeRef
+                |> typeSpecToStr resolveTypeRef nullGenVarMap None
+            "typeof(" + s + ")"
+        | TypeSig.ValueType typeRef ->
+            decodeEnumElement resolveTypeRef typeRef r
+        | TypeSig.Object ->
+            let caType = decodeFieldOrPropType resolveTypeRef r
+            decodeElement resolveTypeRef caType r
+        | TypeSig.SZArray typeSig ->
+            let n = r.U32()
+            if n = 0xffffffffu then
+                "null"
+            else
+                let args =
+                    seq {
+                        for i in 1u .. n ->
+                            decodeFixedArg resolveTypeRef typeSig r
+                    }
+                    |> String.concat ", "
+                "new " + typeSigToStr resolveTypeRef nullGenVarMap None typeSig + "[] { " + args + " }"
+        | _ ->
+            Diagnostics.Debugger.Break()
+            raise(NotImplementedException()) // TODO
 
 let attrToStr resolveTypeRef varMap (attr : CustomAttribute) =
     if attr.methodRef.methodName <> ".ctor" then
@@ -159,7 +553,7 @@ let attrToStr resolveTypeRef varMap (attr : CustomAttribute) =
         match attr.methodRef.typeRef with
         | None -> raise(NotSupportedException())
         | Some typeSpec -> typeSpec
-    let name = typeSpecToStr varMap None typeSpec
+    let name = typeSpecToStr resolveTypeRef varMap None typeSpec
     let suffix = "Attribute"
     let shortName =
         if name.EndsWith(suffix) then
@@ -180,9 +574,9 @@ let attrToStr resolveTypeRef varMap (attr : CustomAttribute) =
                 match r.U8() with
                 | 0x53uy (* FIELD *)
                 | 0x54uy (* PROPERTY *) ->
-                    let typeSig = decodeFieldOrPropType r
+                    let caType = decodeFieldOrPropType resolveTypeRef r
                     let name = decodeSerString r
-                    let arg = decodeFixedArg resolveTypeRef typeSig r
+                    let arg = decodeElement resolveTypeRef caType r
                     yield name + "=" + arg
                 | _ -> failwith "Invalid custom attribute named argument."
         ]

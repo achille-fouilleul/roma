@@ -12,16 +12,8 @@ let private constantToStr constant =
     | ConstantBool true -> "true"
     | ConstantBytearray bytes -> raise(NotImplementedException()) // TODO
     | ConstantChar value -> char value |> charToCSharpStr
-    | ConstantR4 0xffc00000u -> "0.0f / 0.0f" // NaN
-    | ConstantR4 0x7f800000u -> "1.0f / 0.0f" // +inf
-    | ConstantR4 0xff800000u -> "-1.0f / 0.0f" // -inf
-    | ConstantR4 value ->
-        (BitConverter.ToSingle(BitConverter.GetBytes(value), 0)).ToString("r", ic) + "f"
-    | ConstantR8 0xfff8000000000000UL -> "0.0 / 0.0" // NaN
-    | ConstantR8 0x7ff0000000000000UL -> "1.0 / 0.0" // +inf
-    | ConstantR8 0xfff0000000000000UL -> "-1.0 / 0.0" // -inf
-    | ConstantR8 value ->
-        (BitConverter.ToDouble(BitConverter.GetBytes(value), 0)).ToString("r", ic)
+    | ConstantR4 value -> float32ToCSharpStr value
+    | ConstantR8 value -> float64ToCSharpStr value
     | ConstantI1 value -> value.ToString(ic)
     | ConstantU1 value -> value.ToString(ic)
     | ConstantI2 value -> value.ToString(ic)
@@ -37,9 +29,58 @@ let private dumpAttrs (w : Writer) resolveTypeRef varMap (attrs : seq<CustomAttr
     for attr in attrs do
         w.Print("[" + attrToStr resolveTypeRef varMap attr + "]")
 
+let private dumpProp (w : Writer) resolveTypeRef varMap (prop : Property) =
+    dumpAttrs w resolveTypeRef varMap prop.customAttrs
+
+    // TODO: attributes
+    // TODO: handle PropertyAttributes.HasDefault
+    // TODO: visibility
+
+    let xs = Collections.Generic.List<string>()
+
+    if not prop.hasThis then
+        xs.Add("static")
+
+    xs.Add(typeSigToStr resolveTypeRef varMap None prop.retType)
+
+    if prop.paramTypes.Length <> 0 then
+        let ps = Seq.map (typeSigToStr resolveTypeRef varMap None) prop.paramTypes
+        xs.Add("this[" + String.concat ", " ps + "]") // TODO: param names
+    else
+        xs.Add(prop.name)
+
+    xs.Add("{")
+
+    for sem, mth in prop.methods do
+        // TODO: attributes, visibility, virtuality, etc. of referenced methods
+        match sem with
+        | sem when sem.HasFlag(MethodSemanticsAttribute.Getter) -> xs.Add("get;")
+        | sem when sem.HasFlag(MethodSemanticsAttribute.Setter) -> xs.Add("set;")
+        | _ -> failwith "Invalid property semantics."
+
+    xs.Add("}")
+
+    w.Print(String.concat " " xs)
+
+let private dumpEvent (w : Writer) resolveTypeRef varMap (evt : Event) =
+    dumpAttrs w resolveTypeRef varMap evt.customAttrs
+
+    let xs = Collections.Generic.List<string>()
+
+    // TODO: visibility, static
+
+    xs.Add("event")
+
+    evt.typeRef |> Option.iter (fun typeRef -> xs.Add(typeSpecToStr resolveTypeRef varMap None typeRef))
+
+    xs.Add(evt.name + ";")
+
+    w.Print(String.concat " " xs)
+
 let private dumpField (w : Writer) resolveTypeRef varMap (fld : FieldDef) =
     dumpAttrs w resolveTypeRef varMap fld.customAttrs
     // TODO: attributes
+
     let xs = Collections.Generic.List<string>()
 
     match fld.flags &&& FieldAttributes.FieldAccessMask with
@@ -58,7 +99,7 @@ let private dumpField (w : Writer) resolveTypeRef varMap (fld : FieldDef) =
     if (fld.flags &&& FieldAttributes.InitOnly) = FieldAttributes.InitOnly then
         xs.Add("readonly")
 
-    xs.Add(typeSigToStr varMap None fld.typeSig)
+    xs.Add(typeSigToStr resolveTypeRef varMap None fld.typeSig)
     xs.Add(fld.name);
     match fld.constant with
     | None -> ()
@@ -114,7 +155,7 @@ let private dumpMethod w resolveTypeRef varMap ownerTypeName (mth : MethodDef) =
     // TODO: vararg methods (__arglist)
     // TODO: C# params keyword (ParamArrayAttribute)
     // TODO: C# unsafe keyword if pointers involved
-    let retTypeStr = typeSigToStr genVarMap None mth.signature.retType
+    let retTypeStr = typeSigToStr resolveTypeRef genVarMap None mth.signature.retType
     let pars = seq {
         for typeSig, parOpt in Seq.zip mth.signature.paramTypes mth.parameters ->
             let byRefDir =
@@ -126,7 +167,7 @@ let private dumpMethod w resolveTypeRef varMap ownerTypeName (mth : MethodDef) =
                     | false, true -> Some OutOnly
                     | _ -> None
                 ) parOpt
-            let typeStr = typeSigToStr genVarMap byRefDir typeSig
+            let typeStr = typeSigToStr resolveTypeRef genVarMap byRefDir typeSig
             seq {
                 match parOpt with
                 | None -> yield typeStr
@@ -135,6 +176,10 @@ let private dumpMethod w resolveTypeRef varMap ownerTypeName (mth : MethodDef) =
                         yield "[" + attrToStr resolveTypeRef genVarMap attr + "]"
                     yield typeStr
                     yield par.name
+                    match par.constant with
+                    | None -> ()
+                    | Some constant ->
+                        yield "= " + constantToStr constant
             }
             |> String.concat " "
     }
@@ -237,7 +282,7 @@ let rec private dumpType (w : Writer) resolveTypeRef (typeDef : TypeDef) (nestin
             if n > 0 then
                 let expectedSuffix = "`" + intToStr n
                 if typeDef.typeName.EndsWith(expectedSuffix) then
-                    typeDef.typeName.[0 .. typeDef.typeName.Length - expectedSuffix.Length - 1]
+                    typeDef.typeName.[.. typeDef.typeName.Length - expectedSuffix.Length - 1]
                 else
                     w.Warn("generic type name missing `n suffix")
                     typeDef.typeName
@@ -245,10 +290,15 @@ let rec private dumpType (w : Writer) resolveTypeRef (typeDef : TypeDef) (nestin
                 typeDef.typeName
 
     let name =
-        if typeDef.genericParams.Length = 0 then
+        let i =
+            match nestingStack with
+            | [] -> 0
+            | enclosingTypeDef :: _ -> enclosingTypeDef.genericParams.Length
+        let n = typeDef.genericParams.Length
+        if i = n then
             simpleName
         else
-            simpleName + "<" + (String.concat ", " genVars) + ">"
+            simpleName + "<" + String.concat ", " genVars.[i .. n - 1] + ">"
     header.Add(name)
 
     let inheritanceList = [
@@ -256,22 +306,22 @@ let rec private dumpType (w : Writer) resolveTypeRef (typeDef : TypeDef) (nestin
         | TKDelegate | TKStruct -> ()
         | TKInterface ->
             for intf in typeDef.interfaces do
-                yield typeSpecToStr varMap None intf
+                yield typeSpecToStr resolveTypeRef varMap None intf
         | TKEnum -> // TODO
             match enumUnderlyingType typeDef with
             | I4 -> ()
             | typeSig ->
-                yield typeSigToStr varMap None typeSig
+                yield typeSigToStr resolveTypeRef varMap None typeSig
         | TKClass ->
             match typeDef.baseType with
             | None -> ()
             | Some typeSpec ->
                 // TODO: better check (i.e. not only name-based)
-                let name = typeSpecToStr varMap None typeSpec
+                let name = typeSpecToStr resolveTypeRef varMap None typeSpec
                 if name <> "System.Object" then
                     yield name
             for intf in typeDef.interfaces do
-                yield typeSpecToStr varMap None intf
+                yield typeSpecToStr resolveTypeRef varMap None intf
     ]
 
     if not(List.isEmpty inheritanceList) then
@@ -285,20 +335,47 @@ let rec private dumpType (w : Writer) resolveTypeRef (typeDef : TypeDef) (nestin
     w.Enter()
     for nestedType in typeDef.nestedTypes do
         dumpType w resolveTypeRef nestedType (typeDef :: nestingStack)
+    for prop in typeDef.properties do
+        dumpProp w resolveTypeRef varMap prop
+    for evt in typeDef.events do
+        dumpEvent w resolveTypeRef varMap evt
     for fld in typeDef.fields do
         dumpField w resolveTypeRef varMap fld
     for mth in typeDef.methods do
         dumpMethod w resolveTypeRef varMap simpleName mth
-    // TODO: properties, events
     w.Leave()
     w.Print("}")
 
+let private findAssembly assemblyRef refs =
+    try
+        let _, m =
+            refs
+            |> Seq.find (
+                fun (path, m) ->
+                    match m.assembly with
+                    | Some a when a.name = assemblyRef.Name -> true // TODO: better check
+                    | _ -> false
+            )
+        m
+    with :? Collections.Generic.KeyNotFoundException ->
+        failwithf "Could not resolve assembly '%s'" assemblyRef.Name
+
 let private findTypeDef (m : Module) (typeRef : TypeRef) =
-    m.typeDefs
-    |> Seq.find (
-        fun typeDef ->
-            (typeDef.typeNamespace, typeDef.typeName) = (typeRef.typeNamespace, typeRef.typeName)
-    )
+    // TODO: performance: use a Map
+    try
+        m.typeDefs
+        |> Seq.find (
+            fun typeDef ->
+                (typeDef.typeNamespace, typeDef.typeName) = (typeRef.typeNamespace, typeRef.typeName)
+        )
+    with :? Collections.Generic.KeyNotFoundException ->
+        let typeName =
+            match typeRef.typeNamespace with
+            | "" -> typeRef.typeName
+            | _ -> typeRef.typeNamespace + "." + typeRef.typeName
+        match m.assembly with
+        | Some a -> failwith "Could not resolve type '%s' in assembly '%s'." typeName a.name
+        | None -> failwith "Could not resolve type '%s' in module '%s'." typeName m.moduleName
 
 let dump refs (m : Module) =
     let w = Writer()
@@ -310,16 +387,9 @@ let dump refs (m : Module) =
         | Some(TypeRefScope(TypeSpec.Choice1Of2 enclosingTypeRef)) ->
             let enclosingTypeDef = resolveTypeRef enclosingTypeRef
             enclosingTypeDef.nestedTypes
-            |> Seq.find (fun typeDef -> typeDef.typeName = typeRef.typeName)
+            |> Seq.find (fun typeDef -> typeDef.typeName = typeRef.typeName) // TODO: error handling
         | Some(AssemblyRefScope assemblyRef) ->
-            let _, m =
-                refs
-                |> Seq.find (
-                    fun (path, m) ->
-                        match m.assembly with
-                        | Some a when a.name = assemblyRef.Name -> true // TODO: better check
-                        | _ -> false
-                )
+            let m = findAssembly assemblyRef refs
             findTypeDef m typeRef
         | Some(_) ->
             Diagnostics.Debugger.Break()
