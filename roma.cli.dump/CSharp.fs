@@ -6,25 +6,6 @@ open Internal.StrUtil
 open Internal.CSharp.TypeToStr
 open Internal.CSharp.CustomAttrToStr
 
-let private constantToStr constant =
-    match constant with
-    | ConstantBool false -> "false"
-    | ConstantBool true -> "true"
-    | ConstantBytearray bytes -> raise(NotImplementedException()) // TODO
-    | ConstantChar value -> char value |> charToCSharpStr
-    | ConstantR4 value -> float32ToCSharpStr value
-    | ConstantR8 value -> float64ToCSharpStr value
-    | ConstantI1 value -> value.ToString(ic)
-    | ConstantU1 value -> value.ToString(ic)
-    | ConstantI2 value -> value.ToString(ic)
-    | ConstantU2 value -> value.ToString(ic)
-    | ConstantI4 value -> value.ToString(ic)
-    | ConstantU4 value -> value.ToString(ic) + "U"
-    | ConstantI8 value -> value.ToString(ic) + "L"
-    | ConstantU8 value -> value.ToString(ic) + "UL"
-    | ConstantString s -> strToCSharpStr s
-    | ConstantNullRef -> "null"
-
 let private dumpAttrs (w : Writer) resolveTypeRef varMap (attrs : seq<CustomAttribute>) =
     for attr in attrs do
         w.Print("[" + attrToStr resolveTypeRef varMap attr + "]")
@@ -105,7 +86,7 @@ let private dumpField (w : Writer) resolveTypeRef varMap (fld : FieldDef) =
     | None -> ()
     | Some constant ->
         // TODO: warn if non-static
-        xs.Add("= " + (constantToStr constant))
+        xs.Add("= " + constantToCSharpStr constant)
     w.Print((String.concat " " xs) + ";")
 
 let private makeWhereClause resolveTypeRef varMap (genPar : GenericParam) =
@@ -205,7 +186,7 @@ let private dumpMethod w resolveTypeRef varMap ownerTypeName (mth : MethodDef) =
                     match par.constant with
                     | None -> ()
                     | Some constant ->
-                        yield "= " + constantToStr constant
+                        yield "= " + constantToCSharpStr constant
             }
             |> String.concat " "
     }
@@ -361,20 +342,52 @@ let rec private dumpType (w : Writer) resolveTypeRef (typeDef : TypeDef) (nestin
 
     // TODO: special processing for interfaces, enums, delegates
 
-    w.Print((String.concat " " header) + " {")
-    w.Enter()
-    for nestedType in typeDef.nestedTypes do
-        dumpType w resolveTypeRef nestedType (typeDef :: nestingStack)
-    for prop in typeDef.properties do
-        dumpProp w resolveTypeRef varMap prop
-    for evt in typeDef.events do
-        dumpEvent w resolveTypeRef varMap evt
-    for fld in typeDef.fields do
-        dumpField w resolveTypeRef varMap fld
-    for mth in typeDef.methods do
-        dumpMethod w resolveTypeRef varMap simpleName mth
-    w.Leave()
-    w.Print("}")
+    match typeKind with
+    | TKInterface | TKStruct | TKClass ->
+        w.Print(String.concat " " header + " {")
+        w.Enter()
+        for nestedType in typeDef.nestedTypes do
+            dumpType w resolveTypeRef nestedType (typeDef :: nestingStack)
+        for prop in typeDef.properties do
+            dumpProp w resolveTypeRef varMap prop
+        for evt in typeDef.events do
+            dumpEvent w resolveTypeRef varMap evt
+        for fld in typeDef.fields do
+            dumpField w resolveTypeRef varMap fld
+        for mth in typeDef.methods do
+            dumpMethod w resolveTypeRef varMap simpleName mth
+        w.Leave()
+        w.Print("}")
+
+    | TKEnum ->
+        // TODO: warn if not standard-compliant
+        w.Print(String.concat " " header + " {")
+        w.Enter()
+        let rec loop fields =
+            let last =
+                match fields with
+                | [ fld ] -> true
+                | _ -> false
+            match fields with
+            | (fld : FieldDef) :: tl ->
+                dumpAttrs w resolveTypeRef varMap fld.customAttrs
+                match fld.constant with
+                | None -> ()
+                | Some constant ->
+                    let s = fld.name + " = " + constantToCSharpStr constant
+                    if last then
+                        w.Print(s)
+                    else
+                        w.Print(s + ",")
+                loop tl
+            | [] -> ()
+        loop typeDef.fields
+        w.Leave()
+        w.Print("}")
+
+    | TKDelegate ->
+        // TODO: warn if not standard-compliant
+        w.Print(String.concat " " header + ";")
 
 let private findAssembly assemblyRef refs =
     try

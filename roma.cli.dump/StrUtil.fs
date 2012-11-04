@@ -2,6 +2,7 @@
 
 open System
 open System.Globalization
+open Roma.Cli
 
 let ic = CultureInfo.InvariantCulture
 
@@ -64,6 +65,7 @@ let private escapeChar c =
     | '\t' -> "\\t"
     | '\n' -> "\\n"
     | '\r' -> "\\r"
+    | '\\' -> "\\\\"
     | c when c >= '\u0020' && c < '\u007f' -> string c
     | c -> "\\x" + (uint16 c).ToString("x04", ic)
 
@@ -92,3 +94,23 @@ let float64ToCSharpStr (value : uint64) =
     | 0x7ff0000000000000UL -> "1.0 / 0.0" // +inf
     | 0xfff0000000000000UL -> "-1.0 / 0.0" // -inf
     | _ -> (utor64 value).ToString("r", ic)
+
+let constantToCSharpStr constant =
+    match constant with
+    | ConstantBool false -> "false"
+    | ConstantBool true -> "true"
+    | ConstantBytearray bytes -> raise(NotImplementedException()) // TODO
+    | ConstantChar value -> char value |> charToCSharpStr
+    | ConstantR4 value -> float32ToCSharpStr value
+    | ConstantR8 value -> float64ToCSharpStr value
+    | ConstantI1 value -> value.ToString(ic)
+    | ConstantU1 value -> value.ToString(ic)
+    | ConstantI2 value -> value.ToString(ic)
+    | ConstantU2 value -> value.ToString(ic)
+    | ConstantI4 value -> value.ToString(ic)
+    | ConstantU4 value -> value.ToString(ic) + "U"
+    | ConstantI8 value -> value.ToString(ic) + "L"
+    | ConstantU8 value -> value.ToString(ic) + "UL"
+    | ConstantString s -> strToCSharpStr s
+    | ConstantNullRef -> "null"
+

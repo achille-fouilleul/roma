@@ -254,61 +254,6 @@ let private parseAssemblyRef (r : CharReader) =
 
     assemblyRef
 
-(*
-let private splitList n xs =
-    let rec loop i list1 list2 =
-        if i < n then
-            match list2 with
-            | [] -> failwith "Too few arguments in generic type instantitiation."
-            | hd :: tl ->
-                let list1' = hd :: list1
-                let list2' = tl
-                loop (i + 1) list1' list2'
-        else
-            list1, list2
-    let list1, list2 = loop 0 [] xs
-    List.rev list1, list2
-
-let private genTypeInst resolveTypeRef typeSpec args =
-    let rec walkSpec typeSpec args =
-        match typeSpec with
-        | TypeSpec.Choice1Of2 typeRef -> walkRef typeRef args
-        | _ ->
-            // typeSpec, args, None
-            Diagnostics.Debugger.Break()
-            raise(NotImplementedException()) // TODO
-    and walkRef typeRef args =
-        let typeRef, typeDef =
-            match typeRef.scope with
-            | Some(TypeRefScope typeSpec) ->
-                let typeSpec', args', (typeDef : TypeDef) = walkSpec typeSpec args
-                let typeRef' = { typeRef with scope = Some(TypeRefScope typeSpec') }
-                let typeDef' =
-                    typeDef.nestedTypes
-                    |> Seq.find (fun typeDef -> typeDef.typeName = typeRef.typeName)
-                typeRef', typeDef'
-            | _ -> 
-                let (typeDef : TypeDef) = resolveTypeRef typeRef
-                typeRef, typeDef
-
-        let n = typeDef.genericParams.Length
-        if n <> 0 then
-            let genType =
-                if isValueType typeDef then
-                    TypeSig.ValueType typeRef
-                else
-                    TypeSig.Class typeRef
-            let genArgs, args' = splitList n args
-            TypeSpec.Choice2Of2(TypeSig.GenericInst(genType, genArgs)), args', typeDef
-        else
-            TypeSpec.Choice1Of2 typeRef, args, typeDef
-
-    let typeSpec', args', typeDef = walkSpec typeSpec args
-    if not(List.isEmpty args') then
-        failwith "Invalid generic type instance."
-    typeSpec'
-*)
-
 let private parseTypeSpec resolveTypeRef (s : string) =
     let r = CharReader(s)
 
@@ -505,14 +450,31 @@ let rec private decodeElement resolveTypeRef caType (r : ByteReader) =
         decodeEnumElement resolveTypeRef typeRef r
 
 and private decodeEnumElement resolveTypeRef typeRef r =
+    let typeDef = resolveTypeRef typeRef
     let name = typeRefToStr resolveTypeRef nullGenVarMap None typeRef
-    let caTypeOpt =
-        resolveTypeRef typeRef
-        |> enumUnderlyingType
-        |> typeSigToCAType
-    match caTypeOpt with
-    | None -> failwith "Invalid underlying enum type."
-    | Some caType -> "(" + name + ")" + decodeElement resolveTypeRef caType r
+    let constant =
+        match enumUnderlyingType typeDef with
+        | TypeSig.I1 -> ConstantI1(r.S8())
+        | TypeSig.U1 -> ConstantU1(r.U8())
+        | TypeSig.I2 -> ConstantI2(r.S16())
+        | TypeSig.U2 -> ConstantU2(r.U16())
+        | TypeSig.I4 -> ConstantI4(r.S32())
+        | TypeSig.U4 -> ConstantU4(r.U32())
+        | TypeSig.I8 -> ConstantI8(r.S64())
+        | TypeSig.U8 -> ConstantU8(r.U64())
+        | _ -> failwith "Invalid underlying enum type."
+    
+    let fldNames =
+        typeDef.fields
+        |> List.choose (
+            fun fld ->
+                match fld.constant with
+                Some c when c = constant -> Some(fld.name)
+                | _ -> None
+        )
+    match fldNames with
+    | [ fldName ] -> name + "." + fldName
+    | _ -> "(" + name + ")" + constantToCSharpStr constant
 
 let rec private decodeFixedArg resolveTypeRef (typeSig : TypeSig) (r : ByteReader) =
     match typeSigToCAType typeSig with
