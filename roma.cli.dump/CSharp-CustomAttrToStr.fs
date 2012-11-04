@@ -114,8 +114,9 @@ let private parseFqn (r : CharReader) =
                 (c >= 'A' && c <= 'Z') ||
                 (c >= 'a' && c <= 'z') ||
                 c = '.' ||
-                c ='`' ||
-                c = '_' ->
+                c = '_' ||
+                c = '<' || c = '>' ||
+                c = '`' ->
             r.Advance()
             buf.Append(c) |> ignore
             loop()
@@ -147,6 +148,7 @@ let parseTypeName (r : CharReader) =
                 c >= 'A' && c <= 'Z' ||
                 c >= 'a' && c <= 'z' ||
                 c = '_' ||
+                c = '<' || c = '>' ||
                 c = '`' ->
             r.Advance()
             buf.Append(c) |> ignore

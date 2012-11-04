@@ -108,6 +108,33 @@ let private dumpField (w : Writer) resolveTypeRef varMap (fld : FieldDef) =
         xs.Add("= " + (constantToStr constant))
     w.Print((String.concat " " xs) + ";")
 
+let private makeWhereClause resolveTypeRef varMap (genPar : GenericParam) =
+    let constraints = Collections.Generic.List<_>()
+    if genPar.flags.HasFlag(GenericParamAttributes.ReferenceTypeConstraint) then
+        constraints.Add("class")
+    if genPar.flags.HasFlag(GenericParamAttributes.NotNullableValueTypeConstraint) then
+        constraints.Add("struct")
+    for typeSpec in genPar.constraints do
+        constraints.Add(typeSpecToStr resolveTypeRef varMap None typeSpec)
+    if genPar.flags.HasFlag(GenericParamAttributes.DefaultConstructorConstraint) then
+        constraints.Add("new()")
+    if constraints.Count <> 0 then
+        "where " + genPar.name + " : " + String.concat ", " constraints
+    else
+        null
+
+let private makeGenericParamsStr (gps : seq<GenericParam>) =
+    let xs =
+        seq {
+            for gp in gps ->
+                // TODO: variance (in: contravariant / out: covariant)
+                match gp.flags &&& GenericParamAttributes.VarianceMask with
+                | GenericParamAttributes.Covariant -> "out " + gp.name
+                | GenericParamAttributes.Contravariant -> "in " + gp.name
+                | _ -> gp.name
+        }
+    "<" + String.concat ", " xs + ">"
+
 let private dumpMethod w resolveTypeRef varMap ownerTypeName (mth : MethodDef) =
     let genMvars = [| for p in mth.genericParams -> p.name |]
     let genVarMap = { varMap with mvars = genMvars }
@@ -146,11 +173,10 @@ let private dumpMethod w resolveTypeRef varMap ownerTypeName (mth : MethodDef) =
         xs.Add("abstract")
 
     let name =
-        if genMvars.Length <> 0 then
-            mth.name + "<" + (String.concat ", " genMvars) + ">"
+        if mth.genericParams.Length <> 0 then
+            mth.name + makeGenericParamsStr mth.genericParams
         else
             mth.name
-    // TODO: gen param constraints (where %s : %s ...)
     // TODO: retval attributes
     // TODO: vararg methods (__arglist)
     // TODO: C# params keyword (ParamArrayAttribute)
@@ -189,14 +215,18 @@ let private dumpMethod w resolveTypeRef varMap ownerTypeName (mth : MethodDef) =
     | ".cctor" ->
         // TODO: warn if return type is not void
         // TODO: check for specialname & rtspecialname flags
-        xs.Add(ownerTypeName + paramsStr + ";")
-        w.Print(String.concat " " xs)
+        xs.Add(ownerTypeName + paramsStr)
+        w.Print(String.concat " " xs + ";")
     | "Finalize" when true (* TODO: non-generic, return type = void, no parameters... *) ->
-        w.Print("~" + ownerTypeName)
+        w.Print("~" + ownerTypeName + "();")
     | _ -> // TODO: operators
         xs.Add(retTypeStr)
-        xs.Add(name + paramsStr + ";")
-        w.Print(String.concat " " xs)
+        xs.Add(name + paramsStr)
+        for genPar in mth.genericParams do
+            let whereClause = makeWhereClause resolveTypeRef genVarMap genPar
+            if whereClause <> null then
+                xs.Add(whereClause)
+        w.Print(String.concat " " xs + ";")
     // TODO: method body
 
 type private TypeKind =
@@ -271,16 +301,17 @@ let rec private dumpType (w : Writer) resolveTypeRef (typeDef : TypeDef) (nestin
         if typeDef.genericParams.Length < enclosingType.genericParams.Length then
             w.Warn("expected nested type to have at least as many generic parameters as its enclosing type")
 
-    let simpleName =
-        match typeDef.genericParams with
-        | [||] -> typeDef.typeName
-        | ps ->
-            let n = 
-                match nestingStack with
-                | [] -> ps.Length
-                | enclosingType :: _ -> ps.Length - enclosingType.genericParams.Length
-            if n > 0 then
-                let expectedSuffix = "`" + intToStr n
+    let simpleName, name, newGenPars =
+        let i =
+            match nestingStack with
+            | [] -> 0
+            | enclosingTypeDef :: _ -> enclosingTypeDef.genericParams.Length
+        let n = typeDef.genericParams.Length
+
+        let simpleName =
+            let m = n - i
+            if m > 0 then
+                let expectedSuffix = "`" + intToStr m
                 if typeDef.typeName.EndsWith(expectedSuffix) then
                     typeDef.typeName.[.. typeDef.typeName.Length - expectedSuffix.Length - 1]
                 else
@@ -289,16 +320,12 @@ let rec private dumpType (w : Writer) resolveTypeRef (typeDef : TypeDef) (nestin
             else
                 typeDef.typeName
 
-    let name =
-        let i =
-            match nestingStack with
-            | [] -> 0
-            | enclosingTypeDef :: _ -> enclosingTypeDef.genericParams.Length
-        let n = typeDef.genericParams.Length
-        if i = n then
-            simpleName
+        if i < n then
+            let newGenPars = typeDef.genericParams.[i .. n - 1]
+            let name = simpleName + makeGenericParamsStr newGenPars
+            simpleName, name, newGenPars
         else
-            simpleName + "<" + String.concat ", " genVars.[i .. n - 1] + ">"
+            simpleName, simpleName, [||]
     header.Add(name)
 
     let inheritanceList = [
@@ -307,7 +334,7 @@ let rec private dumpType (w : Writer) resolveTypeRef (typeDef : TypeDef) (nestin
         | TKInterface ->
             for intf in typeDef.interfaces do
                 yield typeSpecToStr resolveTypeRef varMap None intf
-        | TKEnum -> // TODO
+        | TKEnum ->
             match enumUnderlyingType typeDef with
             | I4 -> ()
             | typeSig ->
@@ -327,7 +354,10 @@ let rec private dumpType (w : Writer) resolveTypeRef (typeDef : TypeDef) (nestin
     if not(List.isEmpty inheritanceList) then
         header.Add(": " + (String.concat ", " inheritanceList))
 
-    // TODO: generic param constraints (where %s : %s ...)
+    for genPar in newGenPars do
+        let whereClause = makeWhereClause resolveTypeRef varMap genPar
+        if whereClause <> null then
+            header.Add(whereClause)
 
     // TODO: special processing for interfaces, enums, delegates
 
