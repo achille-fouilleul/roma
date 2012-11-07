@@ -75,7 +75,7 @@ let charToCSharpStr c =
 
 let strToCSharpStr s =
     let s' =
-        if String.forall (fun c -> c >= '\u0020' && c < '\u007f' && c <> '"') s then
+        if String.forall (fun c -> c >= '\u0020' && c < '\u007f' && c <> '"' && c <> '\\') s then
             s
         else
             String.collect (fun c -> if c = '"' then "\\\"" else escapeChar c) s

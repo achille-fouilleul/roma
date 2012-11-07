@@ -360,7 +360,7 @@ let private decodeNativeTypeSigIntrinsic (blob : byte[]) off =
         let s2 = decodeNativeTypeSigStr blob off
         NativeCustom(s1, s2)
     | 0x2duy -> NativeError
-    | 0x2fuy -> NativeNone
+    | 0x2fuy -> NativeHString
     | _ ->
         failwith "Invalid native intrinsic."
 

@@ -10,8 +10,66 @@ let private dumpAttrs (w : Writer) resolveTypeRef varMap (attrs : seq<CustomAttr
     for attr in attrs do
         w.Print("[" + attrToStr resolveTypeRef varMap attr + "]")
 
-let private dumpProp (w : Writer) resolveTypeRef varMap (prop : Property) =
+let private findMethod resolveTypeRef (methodRef : MethodRef) =
+    match methodRef.typeRef with
+    | Some(TypeSpec.Choice1Of2 typeRef) ->
+        let (typeDef : TypeDef) = resolveTypeRef typeRef
+        typeDef.methods |> List.find (
+            fun mth ->
+                mth.name = methodRef.methodName &&
+                mth.signature = methodRef.signature
+        )
+    | _ -> failwith "Method not found."
+
+let private methodVisibilityToStr flags =
+    match flags &&& MethodAttributes.MemberAccessMask with
+    | MethodAttributes.CompilerControlled -> "__compilercontrolled" // TODO: warn; not supported in C#
+    | MethodAttributes.Private -> "private"
+    | MethodAttributes.FamANDAssem -> "__famandassem" // TODO: warn; not supported in C#
+    | MethodAttributes.Assem -> "internal"
+    | MethodAttributes.Family -> "protected"
+    | MethodAttributes.FamORAssem -> "protected internal"
+    | MethodAttributes.Public -> "public"
+    | _ -> failwith "Invalid method visibility."
+
+let private zeroOrOne f xs =
+    let rec loop xs x =
+        match xs with
+        | [] -> x
+        | hd :: tl ->
+            match f(hd) with
+            | None -> loop tl x
+            | y ->
+                match x with
+                | None -> loop tl y
+                | Some _ ->
+                    raise(InvalidOperationException("more than one matching item"))
+    loop xs None
+
+let private getMethod resolveTypeRef mths flag =
+    mths
+    |> zeroOrOne (
+        fun (sem : #Enum, mthRef) ->
+            if sem.HasFlag(flag) then
+                Some(findMethod resolveTypeRef mthRef)
+            else
+                None
+    )
+
+type private TypeKind =
+    | TKInterface
+    | TKEnum
+    | TKStruct
+    | TKDelegate
+    | TKClass
+
+let private dumpProp (w : Writer) resolveTypeRef varMap typeKind (prop : Property) =
     dumpAttrs w resolveTypeRef varMap prop.customAttrs
+
+    let getMth = getMethod resolveTypeRef prop.methods MethodSemanticsAttribute.Getter
+    let setMth = getMethod resolveTypeRef prop.methods MethodSemanticsAttribute.Setter
+
+    let mths = List.choose id [ getMth; setMth ]
 
     // TODO: attributes
     // TODO: handle PropertyAttributes.HasDefault
@@ -25,8 +83,23 @@ let private dumpProp (w : Writer) resolveTypeRef varMap (prop : Property) =
     xs.Add(typeSigToStr resolveTypeRef varMap None prop.retType)
 
     if prop.paramTypes.Length <> 0 then
-        let ps = Seq.map (typeSigToStr resolveTypeRef varMap None) prop.paramTypes
-        xs.Add("this[" + String.concat ", " ps + "]") // TODO: param names
+        let mth = List.head mths
+        let types = Seq.map (typeSigToStr resolveTypeRef varMap None) prop.paramTypes
+        let pars = mth.parameters
+        let ps =
+            seq {
+                for (t, parOpt) in Seq.zip types pars ->
+                    match parOpt with
+                    | None -> t // TODO: warn
+                    | Some par -> t + " " + par.name
+            }
+        let prefix =
+            let p = mth.name.LastIndexOf('.')
+            if p < 0 then
+                ""
+            else
+                mth.name.[.. p]
+        xs.Add(prefix + "this[" + String.concat ", " ps + "]")
     else
         xs.Add(prop.name)
 
@@ -43,20 +116,39 @@ let private dumpProp (w : Writer) resolveTypeRef varMap (prop : Property) =
 
     w.Print(String.concat " " xs)
 
-let private dumpEvent (w : Writer) resolveTypeRef varMap (evt : Event) =
+    mths
+
+let private dumpEvent (w : Writer) resolveTypeRef varMap typeKind (evt : Event) =
     dumpAttrs w resolveTypeRef varMap evt.customAttrs
+
+    let addMth = getMethod resolveTypeRef evt.methods MethodSemanticsAttribute.AddOn
+    let remMth = getMethod resolveTypeRef evt.methods MethodSemanticsAttribute.RemoveOn
+
+    let mths = List.choose id [ addMth; remMth ]
+
+    let isStatic = [ for mth in mths -> mth.flags.HasFlag(MethodAttributes.Static) ] |> List.head
+    let visibility = [ for mth in mths -> mth.flags &&& MethodAttributes.MemberAccessMask ] |> List.head
+    // TODO: warn if other methods have different staticness/visibility
 
     let xs = Collections.Generic.List<string>()
 
-    // TODO: visibility, static
+    if typeKind <> TKInterface then
+        let visStr = methodVisibilityToStr visibility
+        if visStr <> "private" then
+            xs.Add(visStr)
+
+    if isStatic then
+        xs.Add("static")
 
     xs.Add("event")
 
     evt.typeRef |> Option.iter (fun typeRef -> xs.Add(typeSpecToStr resolveTypeRef varMap None typeRef))
 
-    xs.Add(evt.name + ";")
+    xs.Add(evt.name)
 
-    w.Print(String.concat " " xs)
+    w.Print(String.concat " " xs + ";")
+
+    mths
 
 let private dumpField (w : Writer) resolveTypeRef varMap (fld : FieldDef) =
     dumpAttrs w resolveTypeRef varMap fld.customAttrs
@@ -121,7 +213,7 @@ let private dumpMethod w resolveTypeRef varMap ownerTypeName (mth : MethodDef) =
     let genVarMap = { varMap with mvars = genMvars }
     dumpAttrs w resolveTypeRef genVarMap mth.customAttrs
 
-    // TODO: other attributes (e.g. pinvokes, etc.)
+    // TODO: other attributes (e.g. pinvokes, internalcall, etc.)
 
     mth.retVal |> Option.iter (
         fun (par : ParamDef) ->
@@ -131,15 +223,9 @@ let private dumpMethod w resolveTypeRef varMap ownerTypeName (mth : MethodDef) =
 
     let xs = Collections.Generic.List<string>()
 
-    match mth.flags &&& MethodAttributes.MemberAccessMask with
-    | MethodAttributes.CompilerControlled -> xs.Add("__compilercontrolled") // TODO: warn; not supported in C#
-    | MethodAttributes.Private -> if false then xs.Add("private")
-    | MethodAttributes.FamANDAssem -> xs.Add("__famandassem") // TODO: warn; not supported in C#
-    | MethodAttributes.Assem -> xs.Add("internal")
-    | MethodAttributes.Family -> xs.Add("protected")
-    | MethodAttributes.FamORAssem -> xs.Add("protected internal")
-    | MethodAttributes.Public -> xs.Add("public")
-    | _ -> () // not reached
+    let visStr = methodVisibilityToStr mth.flags
+    if visStr <> "private" then
+        xs.Add(visStr)
 
     if (mth.flags &&& MethodAttributes.Static) = MethodAttributes.Static then
         xs.Add("static")
@@ -167,8 +253,8 @@ let private dumpMethod w resolveTypeRef varMap ownerTypeName (mth : MethodDef) =
         for typeSig, parOpt in Seq.zip mth.signature.paramTypes mth.parameters ->
             let byRefDir =
                 Option.bind (fun (par : ParamDef) ->
-                    let dirIn = (par.flags &&& ParamAttributes.In) = ParamAttributes.In
-                    let dirOut = (par.flags &&& ParamAttributes.Out) = ParamAttributes.Out
+                    let dirIn = par.flags.HasFlag(ParamAttributes.In)
+                    let dirOut = par.flags.HasFlag(ParamAttributes.Out)
                     match dirIn, dirOut with
                     | true, true -> Some InOut
                     | false, true -> Some OutOnly
@@ -209,13 +295,6 @@ let private dumpMethod w resolveTypeRef varMap ownerTypeName (mth : MethodDef) =
                 xs.Add(whereClause)
         w.Print(String.concat " " xs + ";")
     // TODO: method body
-
-type private TypeKind =
-    | TKInterface
-    | TKEnum
-    | TKStruct
-    | TKDelegate
-    | TKClass
 
 let rec private dumpType (w : Writer) resolveTypeRef (typeDef : TypeDef) (nestingStack : TypeDef list) =
     // TODO: built-in attributes
@@ -340,7 +419,7 @@ let rec private dumpType (w : Writer) resolveTypeRef (typeDef : TypeDef) (nestin
         if whereClause <> null then
             header.Add(whereClause)
 
-    // TODO: special processing for interfaces, enums, delegates
+    // TODO: special processing for interfaces, delegates
 
     match typeKind with
     | TKInterface | TKStruct | TKClass ->
@@ -348,14 +427,19 @@ let rec private dumpType (w : Writer) resolveTypeRef (typeDef : TypeDef) (nestin
         w.Enter()
         for nestedType in typeDef.nestedTypes do
             dumpType w resolveTypeRef nestedType (typeDef :: nestingStack)
-        for prop in typeDef.properties do
-            dumpProp w resolveTypeRef varMap prop
-        for evt in typeDef.events do
-            dumpEvent w resolveTypeRef varMap evt
+        let specialMethods =
+            [
+                for prop in typeDef.properties do
+                    yield! dumpProp w resolveTypeRef varMap typeKind prop
+                for evt in typeDef.events do
+                    yield! dumpEvent w resolveTypeRef varMap typeKind evt
+            ]
+        specialMethods |> List.iter (fun mth -> assert(mth.flags.HasFlag(MethodAttributes.SpecialName)))
         for fld in typeDef.fields do
             dumpField w resolveTypeRef varMap fld
         for mth in typeDef.methods do
-            dumpMethod w resolveTypeRef varMap simpleName mth
+            if not(List.exists (fun m -> m = mth) specialMethods) then
+                dumpMethod w resolveTypeRef varMap simpleName mth
         w.Leave()
         w.Print("}")
 
@@ -364,10 +448,6 @@ let rec private dumpType (w : Writer) resolveTypeRef (typeDef : TypeDef) (nestin
         w.Print(String.concat " " header + " {")
         w.Enter()
         let rec loop fields =
-            let last =
-                match fields with
-                | [ fld ] -> true
-                | _ -> false
             match fields with
             | (fld : FieldDef) :: tl ->
                 dumpAttrs w resolveTypeRef varMap fld.customAttrs
@@ -375,10 +455,9 @@ let rec private dumpType (w : Writer) resolveTypeRef (typeDef : TypeDef) (nestin
                 | None -> ()
                 | Some constant ->
                     let s = fld.name + " = " + constantToCSharpStr constant
-                    if last then
-                        w.Print(s)
-                    else
-                        w.Print(s + ",")
+                    match tl with
+                    | [] ->  w.Print(s)
+                    | _ -> w.Print(s + ",")
                 loop tl
             | [] -> ()
         loop typeDef.fields
