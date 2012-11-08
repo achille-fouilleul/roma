@@ -43,7 +43,7 @@ let main (args : string[]) =
         let refs =
             [
                 yield (path, m)
-                for refPath in refPaths ->
+                for refPath in Seq.distinct refPaths ->
                     (refPath, ModuleLoading.loadModule refPath)
             ]
         syntax refs m
