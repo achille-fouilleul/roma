@@ -1,4 +1,4 @@
-﻿# r "bin/Debug/cli.dll"
+﻿#r "bin/Debug/roma.cli.dll"
 
 open Roma.Cli.SignatureDecoding
 
