@@ -382,6 +382,23 @@ type private Scanner(path : string, s : string) =
         tokens.Add(token)
         tokenStart <- None
 
-let internal scan path =
-    // TODO: normalize EOLs
-    Scanner(path, System.IO.File.ReadAllText(path)).Run()
+let internal normalizeEols (text : string) =
+    let buf = System.Text.StringBuilder()
+    let rec loop i =
+        let j = text.IndexOf('\r', i)
+        if j >= 0 then
+            if i <= j - 1 then
+                buf.Append(text.[i .. j - 1]) |> ignore
+            if not(j + 1 < text.Length && text.[j + 1] = '\n') then
+                buf.Append('\n') |> ignore
+            loop (j + 1)
+        else
+            buf.Append(text.[i ..]) |> ignore
+    loop 0
+    buf.ToString()
+
+let scan path =
+    let text =
+        System.IO.File.ReadAllText(path)
+        |> normalizeEols
+    Scanner(path, text).Run()
