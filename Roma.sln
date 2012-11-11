@@ -7,6 +7,8 @@ Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "roma.compiler", "roma.compi
 EndProject
 Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "roma.cli.dump", "roma.cli.dump\roma.cli.dump.fsproj", "{8F9FF123-1D6F-4F11-9C54-0287874C97C2}"
 EndProject
+Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "roma.plang", "roma.plang\roma.plang.fsproj", "{3BB66EE6-C6C3-41F5-AE89-FB20E9327257}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -47,6 +49,16 @@ Global
 		{8F9FF123-1D6F-4F11-9C54-0287874C97C2}.Release|Mixed Platforms.Build.0 = Release|x86
 		{8F9FF123-1D6F-4F11-9C54-0287874C97C2}.Release|x86.ActiveCfg = Release|x86
 		{8F9FF123-1D6F-4F11-9C54-0287874C97C2}.Release|x86.Build.0 = Release|x86
+		{3BB66EE6-C6C3-41F5-AE89-FB20E9327257}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3BB66EE6-C6C3-41F5-AE89-FB20E9327257}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3BB66EE6-C6C3-41F5-AE89-FB20E9327257}.Debug|Mixed Platforms.ActiveCfg = Debug|Any CPU
+		{3BB66EE6-C6C3-41F5-AE89-FB20E9327257}.Debug|Mixed Platforms.Build.0 = Debug|Any CPU
+		{3BB66EE6-C6C3-41F5-AE89-FB20E9327257}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{3BB66EE6-C6C3-41F5-AE89-FB20E9327257}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3BB66EE6-C6C3-41F5-AE89-FB20E9327257}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3BB66EE6-C6C3-41F5-AE89-FB20E9327257}.Release|Mixed Platforms.ActiveCfg = Release|Any CPU
+		{3BB66EE6-C6C3-41F5-AE89-FB20E9327257}.Release|Mixed Platforms.Build.0 = Release|Any CPU
+		{3BB66EE6-C6C3-41F5-AE89-FB20E9327257}.Release|x86.ActiveCfg = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
