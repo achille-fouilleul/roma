@@ -27,6 +27,7 @@ type TokenValue =
     | TokFun
     | TokGoto
     | TokIf
+    | TokNull
     | TokReadonly
     | TokReturn
     | TokSizeof
@@ -36,6 +37,7 @@ type TokenValue =
     | TokTrue
     | TokTry
     | TokUnion
+    | TokUsing
     | TokVar
     | TokWhile
     // TODO: other keywords
@@ -77,8 +79,8 @@ type TokenValue =
     | TokQues
     | TokLBracket
     | TokRBracket
-    | TokXorEq
-    | TokXor
+    | TokHatEq
+    | TokHat
     | TokLBrace
     | TokOrEq
     | TokOrOr
@@ -211,7 +213,7 @@ type private Scanner(path : string, s : string) =
         loop()
         tokens
 
-    member private this.SkipSingleLineComment() =
+    member private this.SkipDelimitedComment() =
         let rec loop() =
             match this.Peek() with
             | None -> this.ErrorEof()
@@ -222,7 +224,7 @@ type private Scanner(path : string, s : string) =
                 loop()
         loop()
 
-    member private this.SkipDelimitedComment() =
+    member private this.SkipSingleLineComment() =
         let rec loop() =
             match this.Peek() with
             | None -> this.ErrorEof()
@@ -259,6 +261,7 @@ type private Scanner(path : string, s : string) =
             | "fun" -> TokFun
             | "goto" -> TokGoto
             | "if" -> TokIf
+            | "null" -> TokNull
             | "readonly" -> TokReadonly
             | "return" -> TokReturn
             | "sizeof" -> TokSizeof
@@ -268,6 +271,7 @@ type private Scanner(path : string, s : string) =
             | "true" -> TokTrue
             | "try" -> TokTry
             | "union" -> TokUnion
+            | "using" -> TokUsing
             | "var" -> TokVar
             | "while" -> TokWhile
             // TODO: other reserved words
@@ -358,8 +362,8 @@ type private Scanner(path : string, s : string) =
             | '?', _, _ -> TokQues, 1
             | '[', _, _ -> TokLBracket, 1
             | ']', _, _ -> TokRBracket, 1
-            | '^', '=', _ -> TokXorEq, 2
-            | '^', _, _ -> TokXor, 1
+            | '^', '=', _ -> TokHatEq, 2
+            | '^', _, _ -> TokHat, 1
             | '{', _, _ -> TokLBrace, 1
             | '|', '=', _ -> TokOrEq, 2
             | '|', '|', _ -> TokOrOr, 2
@@ -382,7 +386,7 @@ type private Scanner(path : string, s : string) =
         tokens.Add(token)
         tokenStart <- None
 
-let internal normalizeEols (text : string) =
+let private normalizeEols (text : string) =
     let buf = System.Text.StringBuilder()
     let rec loop i =
         let j = text.IndexOf('\r', i)
