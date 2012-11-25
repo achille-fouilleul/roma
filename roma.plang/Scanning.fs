@@ -19,6 +19,7 @@ type TokenValue =
     | TokCatch
     | TokContinue
     | TokDefault
+    | TokDo
     | TokElse
     | TokEnum
     | TokFalse
@@ -39,6 +40,7 @@ type TokenValue =
     | TokUnion
     | TokUsing
     | TokVar
+    | TokVoid
     | TokWhile
     // TODO: other keywords
 
@@ -90,6 +92,91 @@ type TokenValue =
     | TokEllipsis
     // TODO: other punctuators
 
+let tokenKindToStr tok =
+    match tok with
+    | TokChar _ -> "character literal"
+    | TokId _ -> "identifier"
+    | TokNumber _ -> "number"
+    | TokString _ -> "string literal"
+
+    | TokBool -> "'bool'"
+    | TokBreak -> "'break'"
+    | TokCase -> "'case'"
+    | TokCatch -> "'catch'"
+    | TokContinue -> "'continue'"
+    | TokDefault -> "'default'"
+    | TokDo -> "'do'"
+    | TokElse -> "'else'"
+    | TokEnum -> "'enum'"
+    | TokFalse -> "'false'"
+    | TokFinally -> "'finally'"
+    | TokFor -> "'for'"
+    | TokFun -> "'fun'"
+    | TokGoto -> "'goto'"
+    | TokIf -> "'if'"
+    | TokNull -> "'null'"
+    | TokReadonly -> "'readonly'"
+    | TokReturn -> "'return'"
+    | TokSizeof -> "'sizeof'"
+    | TokStruct -> "'struct'"
+    | TokSwitch -> "'switch'"
+    | TokThrow -> "'throw'"
+    | TokTrue -> "'true'"
+    | TokTry -> "'try'"
+    | TokUnion -> "'union'"
+    | TokUsing -> "'using'"
+    | TokVar -> "'var'"
+    | TokVoid -> "'void'"
+    | TokWhile -> "'while'"
+    // TODO: other keywords
+
+    | TokNeq -> "'!='"
+    | TokExcl -> "'!'"
+    | TokModEq -> "'%='"
+    | TokMod -> "'%'"
+    | TokAndAnd -> "'&&'"
+    | TokAndEq -> "'&='"
+    | TokAnd -> "'&'"
+    | TokLParen -> "'('"
+    | TokRParen -> "')'"
+    | TokStarEq -> "'*='"
+    | TokStar -> "'*'"
+    | TokPlusPlus -> "'++'"
+    | TokPlusEq -> "'+='"
+    | TokPlus -> "'+'"
+    | TokComma -> "','"
+    | TokMinusMinus -> "'--'"
+    | TokMinusEq -> "'-='"
+    | TokArrow -> "'->'"
+    | TokMinus -> "'-'"
+    | TokPeriod -> "'.'"
+    | TokSlashEq -> "'/='"
+    | TokSlash -> "'/'"
+    | TokColon -> "':'"
+    | TokSemicolon -> "';'"
+    | TokLshEq -> "'<<='"
+    | TokLsh -> "'<<'"
+    | TokLE -> "'<='"
+    | TokLT -> "'<'"
+    | TokEqEq -> "'=='"
+    | TokEq -> "'='"
+    | TokRshEq -> "'>>='"
+    | TokGE -> "'>='"
+    | TokRsh -> "'>>'"
+    | TokGT -> "'>'"
+    | TokQues -> "'?'"
+    | TokLBracket -> "'['"
+    | TokRBracket -> "']'"
+    | TokHatEq -> "'^='"
+    | TokHat -> "'^'"
+    | TokLBrace -> "'{'"
+    | TokOrEq -> "'|='"
+    | TokOrOr -> "'||'"
+    | TokOr -> "'|'"
+    | TokRBrace -> "'}'"
+    | TokNot -> "'~'"
+    | TokEllipsis -> "'...'"
+
 type Token =
     {
         pos : SourcePosition
@@ -99,7 +186,7 @@ type Token =
 let private isAsciiSpace c =
     c = ' ' || c = '\t' || c = '\n' || c = '\r'
 
-let private punctStart = Set.ofSeq "!%&()*+,-./:;<=>?[]^{|}~"
+let private punctStart = Set.ofSeq "!%&()*+,-/:;<=>?[]^{|}~"
 
 let private isPunctStart c =
     punctStart.Contains(c)
@@ -192,17 +279,19 @@ type private Scanner(path : string, s : string) =
                 | '.' ->
                     match la, this.Peek(2) with
                     | Some '.', Some '.' ->
-                        this.Advance(3)
                         this.YieldToken(TokEllipsis)
+                        this.Advance(3)
                     | Some c, _ when isAsciiDigit c -> this.ScanNumber()
-                    | _ -> this.ScanPunctuator()
+                    | _ ->
+                        this.YieldToken(TokPeriod)
+                        this.Advance(1)
                 | '/' ->
                     match la with
                     | Some '/' ->
-                        this.Advance()
+                        this.Advance(2)
                         this.SkipSingleLineComment()
                     | Some '*' ->
-                        this.Advance()
+                        this.Advance(2)
                         this.SkipDelimitedComment()
                     | _ -> this.ScanPunctuator()
                 | c when isPunctStart c -> this.ScanPunctuator()
@@ -253,6 +342,7 @@ type private Scanner(path : string, s : string) =
             | "catch" -> TokCatch
             | "continue" -> TokContinue
             | "default" -> TokDefault
+            | "do" -> TokDo
             | "else" -> TokElse
             | "enum" -> TokEnum
             | "false" -> TokFalse
@@ -273,6 +363,7 @@ type private Scanner(path : string, s : string) =
             | "union" -> TokUnion
             | "using" -> TokUsing
             | "var" -> TokVar
+            | "void" -> TokVoid
             | "while" -> TokWhile
             // TODO: other reserved words
             | s -> TokId s
@@ -344,7 +435,6 @@ type private Scanner(path : string, s : string) =
             | '-', '=', _ -> TokMinusEq, 2
             | '-', '>', _ -> TokArrow, 2
             | '-', _, _ -> TokMinus, 1
-            | '.', _, _ -> TokPeriod, 1
             | '/', '=', _ -> TokSlashEq, 2
             | '/', _, _ -> TokSlash, 1
             | ':', _, _ -> TokColon, 1
