@@ -17,6 +17,9 @@ type TokenValue =
     | TokBreak
     | TokCase
     | TokCatch
+    | TokChar8
+    | TokChar16
+    | TokChar32
     | TokContinue
     | TokDefault
     | TokDo
@@ -24,19 +27,32 @@ type TokenValue =
     | TokEnum
     | TokFalse
     | TokFinally
+    | TokFloat32
+    | TokFloat64
     | TokFor
     | TokFun
     | TokGoto
     | TokIf
     | TokNull
+    | TokNull_t
     | TokReadonly
     | TokReturn
+    | TokSInt8
+    | TokSInt16
+    | TokSInt32
+    | TokSInt64
+    | TokSIntPtr
     | TokSizeof
     | TokStruct
     | TokSwitch
     | TokThrow
     | TokTrue
     | TokTry
+    | TokUInt8
+    | TokUInt16
+    | TokUInt32
+    | TokUInt64
+    | TokUIntPtr
     | TokUnion
     | TokUsing
     | TokVar
@@ -103,6 +119,9 @@ let tokenKindToStr tok =
     | TokBreak -> "'break'"
     | TokCase -> "'case'"
     | TokCatch -> "'catch'"
+    | TokChar8 -> "'char8_t'"
+    | TokChar16 -> "'char16_t'"
+    | TokChar32 -> "'char32_t'"
     | TokContinue -> "'continue'"
     | TokDefault -> "'default'"
     | TokDo -> "'do'"
@@ -110,19 +129,32 @@ let tokenKindToStr tok =
     | TokEnum -> "'enum'"
     | TokFalse -> "'false'"
     | TokFinally -> "'finally'"
+    | TokFloat32 -> "'float32_t'"
+    | TokFloat64 -> "'float64_t'"
     | TokFor -> "'for'"
     | TokFun -> "'fun'"
     | TokGoto -> "'goto'"
     | TokIf -> "'if'"
     | TokNull -> "'null'"
+    | TokNull_t -> "'null_t'"
     | TokReadonly -> "'readonly'"
     | TokReturn -> "'return'"
+    | TokSInt8 -> "'sint8_t'"
+    | TokSInt16 -> "'sint16_t'"
+    | TokSInt32 -> "'sint32_t'"
+    | TokSInt64 -> "'sint64_t'"
+    | TokSIntPtr -> "'sintptr_t'"
     | TokSizeof -> "'sizeof'"
     | TokStruct -> "'struct'"
     | TokSwitch -> "'switch'"
     | TokThrow -> "'throw'"
     | TokTrue -> "'true'"
     | TokTry -> "'try'"
+    | TokUInt8 -> "'uint8_t'"
+    | TokUInt16 -> "'uint16_t'"
+    | TokUInt32 -> "'uint32_t'"
+    | TokUInt64 -> "'uint64_t'"
+    | TokUIntPtr -> "'uintptr_t'"
     | TokUnion -> "'union'"
     | TokUsing -> "'using'"
     | TokVar -> "'var'"
@@ -340,6 +372,9 @@ type private Scanner(path : string, s : string) =
             | "break" -> TokBreak
             | "case" -> TokCase
             | "catch" -> TokCatch
+            | "char8" -> TokChar8
+            | "char16" -> TokChar16
+            | "char32" -> TokChar32
             | "continue" -> TokContinue
             | "default" -> TokDefault
             | "do" -> TokDo
@@ -347,19 +382,32 @@ type private Scanner(path : string, s : string) =
             | "enum" -> TokEnum
             | "false" -> TokFalse
             | "finally" -> TokFinally
+            | "float32" -> TokFloat32
+            | "float64" -> TokFloat64
             | "for" -> TokFor
             | "fun" -> TokFun
             | "goto" -> TokGoto
             | "if" -> TokIf
             | "null" -> TokNull
+            | "null_t" -> TokNull_t
             | "readonly" -> TokReadonly
             | "return" -> TokReturn
+            | "sint8" -> TokSInt8
+            | "sint16" -> TokSInt16
+            | "sint32" -> TokSInt32
+            | "sint64" -> TokSInt64
+            | "sintptr" -> TokSIntPtr
             | "sizeof" -> TokSizeof
             | "struct" -> TokStruct
             | "switch" -> TokSwitch
             | "throw" -> TokThrow
             | "true" -> TokTrue
             | "try" -> TokTry
+            | "uint8" -> TokUInt8
+            | "uint16" -> TokUInt16
+            | "uint32" -> TokUInt32
+            | "uint64" -> TokUInt64
+            | "uintptr" -> TokUIntPtr
             | "union" -> TokUnion
             | "using" -> TokUsing
             | "var" -> TokVar

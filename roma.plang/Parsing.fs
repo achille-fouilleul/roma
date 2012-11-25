@@ -47,7 +47,28 @@ type AssignOp =
     | OpOrAssign
     | OpXorAssign
 
+type PrimitiveTypeKind =
+    | Bool
+    | Null
+    | Char8
+    | Char16
+    | Char32
+    | SInt8
+    | SInt16
+    | SInt32
+    | SInt64
+    | SIntPtr
+    | UInt8
+    | UInt16
+    | UInt32
+    | UInt64
+    | UIntPtr
+    | Float32
+    | Float64
+
 type Expr =
+    | NullExpr
+    | BoolExpr of bool
     | NumberExpr of string // TODO
     | StringExpr of string
     | ArrayExpr of Expr list
@@ -63,13 +84,13 @@ type Expr =
 
 and TypeExpr =
     | VoidType
+    | PrimitiveType of PrimitiveTypeKind
     | PointerType of TypeExpr * bool (* readonly *)
     | GCRefType of TypeExpr
     | ByRefType of TypeExpr * bool (* readonly *)
     | ArrayType of TypeExpr * Expr option
     | FunctionType of TypeExpr * TypeExpr list
-    | TypeAlias of string
-    // TODO: built-in types...
+    | TypeName of string
 
 type StructDef =
     {
@@ -98,15 +119,21 @@ type Statement =
     | SwitchStmt of Expr * Statement
     | WhileStmt of Expr * Statement
     | DoWhileStmt of Statement * Expr
-    | ForStmt of Choice<VarDef, Expr> option * Expr option * Expr option * Statement
+    | ForStmt of string option * TypeExpr option * Expr option * Expr option * Expr option * Statement
     | GotoStmt of string
     | ContinueStmt
     | BreakStmt
     | ReturnStmt of Expr option
+    | TryBlockStmt of Statement * ExceptionHandler list
+    | ThrowStmt of Expr option
 
 and BlockItem =
     | StmtBlockItem of Statement
     | DeclBlockItem of VarDef
+
+and ExceptionHandler =
+    | CatchHandler of Expr * Statement
+    | FinallyHandler of Statement
 
 type FunDef =
     {
@@ -118,6 +145,7 @@ type FunDef =
     }
 
 type TopLevelDef =
+    // TODO: enum
     | TopStruct of StructDef
     | TopFun of FunDef
     | TopVar of VarDef
@@ -262,6 +290,28 @@ let private assignOpMap =
     ]
     |> Map.ofList
 
+let private primitiveTypeMap =
+    [
+        TokBool, PrimitiveTypeKind.Bool
+        TokNull_t, PrimitiveTypeKind.Null
+        TokChar8, PrimitiveTypeKind.Char8
+        TokChar16, PrimitiveTypeKind.Char16
+        TokChar32, PrimitiveTypeKind.Char32
+        TokSInt8, PrimitiveTypeKind.SInt8
+        TokSInt16, PrimitiveTypeKind.SInt16
+        TokSInt32, PrimitiveTypeKind.SInt32
+        TokSInt64, PrimitiveTypeKind.SInt64
+        TokSIntPtr, PrimitiveTypeKind.SIntPtr
+        TokUInt8, PrimitiveTypeKind.UInt8
+        TokUInt16, PrimitiveTypeKind.UInt16
+        TokUInt32, PrimitiveTypeKind.UInt32
+        TokUInt64, PrimitiveTypeKind.UInt64
+        TokUIntPtr, PrimitiveTypeKind.UIntPtr
+        TokFloat32, PrimitiveTypeKind.Float32
+        TokFloat64, PrimitiveTypeKind.Float64
+    ]
+    |> Map.ofList
+
 let private parseBinOp opMap parseInner tokens =
     match parseInner tokens with
     | None -> None
@@ -285,12 +335,18 @@ let private parseBinOp opMap parseInner tokens =
 
 let rec private parsePrimaryExprOpt tokens =
     match tokens with
-    | { value = TokId s } :: tokens ->
-        Some(tokens, IdExpr s)
+    | { value = TokNull } :: tokens ->
+        Some(tokens, NullExpr)
+    | { value = TokFalse } :: tokens ->
+        Some(tokens, BoolExpr false)
+    | { value = TokTrue } :: tokens ->
+        Some(tokens, BoolExpr true)
     | { value = TokNumber s } :: tokens ->
         Some(tokens, NumberExpr s)
     | { value = TokString s } :: tokens ->
         Some(tokens, StringExpr s)
+    | { value = TokId s } :: tokens ->
+        Some(tokens, IdExpr s)
     | { value = TokLParen } :: tokens ->
         let tokens, expr = parseExpr tokens
         let tokens = expect TokRParen tokens
@@ -429,7 +485,10 @@ and private parseExpr tokens =
 
 and private parseTypeExprOpt tokens =
     match tokens with
-    | { value = TokVoid } :: tokens -> Some(tokens, TypeExpr.VoidType)
+    | { value = TokVoid } :: tokens ->
+        Some(tokens, TypeExpr.VoidType)
+    | { value = value } :: tokens when primitiveTypeMap.ContainsKey(value) ->
+        Some(tokens, TypeExpr.PrimitiveType(primitiveTypeMap.[value]))
     | { value = TokStar } :: tokens ->
         let tokens, ro = parseReadonly tokens
         let tokens, typeExpr = parseTypeExpr tokens
@@ -456,11 +515,8 @@ and private parseTypeExprOpt tokens =
         let tokens, retType = parseTypeAnnotation tokens
         Some(tokens, TypeExpr.FunctionType(retType, paramTypes))
     | { value = TokId name } :: tokens ->
-        Some(tokens, TypeExpr.TypeAlias name)
-    | t :: _ ->
-        eprintfn "%A" t
-        raise(System.NotImplementedException()) // TODO
-    // TODO: built-in types
+        Some(tokens, TypeExpr.TypeName name)
+    | _ -> None
 
 and private parseTypeExpr tokens =
     match parseTypeExprOpt tokens with
@@ -597,14 +653,21 @@ let rec private parseStatementOpt tokens =
         Some(tokens, DoWhileStmt(stmt, expr))
     | { value = TokFor } :: tokens ->
         let tokens = expect TokLParen tokens
-        let tokens, initOpt =
+        let tokens, varNameOpt, varTypeOpt, initOpt =
             match tokens with
-            | ParseOpt parseVarOpt (tokens, varDef) ->
-                tokens, Some(Choice<VarDef, Expr>.Choice1Of2 varDef)
+            | { value = TokVar } :: tokens ->
+                let tokens, name, pos (* TODO: use pos *) = expectId tokens
+                let tokens, typeExprOpt =
+                    match parseTypeAnnotationOpt tokens with
+                    | None -> tokens, None
+                    | Some(tokens, typeExpr) -> tokens, Some typeExpr
+                let tokens = expect TokEq tokens
+                let tokens, expr = parseExpr tokens
+                tokens, Some name, typeExprOpt, Some expr
             | ParseOpt parseExprOpt (tokens, expr) ->
-                let tokens = expect TokSemicolon tokens
-                tokens, Some(Choice<VarDef, Expr>.Choice2Of2 expr)
-            | _ -> tokens, None
+                tokens, None, None, Some expr
+            | _ -> tokens, None, None, None
+        let tokens = expect TokSemicolon tokens
         let tokens, condOpt =
             match tokens with
             | ParseOpt parseExprOpt (tokens, expr) -> tokens, Some expr
@@ -616,7 +679,7 @@ let rec private parseStatementOpt tokens =
             | _ -> tokens, None
         let tokens = expect TokRParen tokens
         let tokens, stmt = parseStatement tokens
-        Some(tokens, ForStmt(initOpt, condOpt, iterOpt, stmt))
+        Some(tokens, ForStmt(varNameOpt, varTypeOpt, initOpt, condOpt, iterOpt, stmt))
     | { value = TokGoto } :: tokens ->
         let tokens, name, pos = expectId tokens
         let tokens = expect TokSemicolon tokens
@@ -634,6 +697,27 @@ let rec private parseStatementOpt tokens =
             | _ -> tokens, None
         let tokens = expect TokSemicolon tokens
         Some(tokens, ReturnStmt exprOpt)
+    | { value = TokTry } :: tokens ->
+        let tokens, stmt = parseCompoundStmt tokens
+        let handlers = System.Collections.Generic.List<_>()
+        let rec loop tokens =
+            match parseExceptionHandlerOpt tokens with
+            | None ->
+                if handlers.Count = 0 then
+                    errorUnexpectedStr tokens "exception handler"
+                tokens
+            | Some(tokens, handler) ->
+                handlers.Add(handler)
+                loop tokens
+        let tokens = loop tokens
+        Some(tokens, TryBlockStmt(stmt, List.ofSeq handlers))
+    | { value = TokThrow } :: tokens ->
+        let tokens, exprOpt =
+            match parseExprOpt tokens with
+            | Some(tokens, expr) -> tokens, Some expr
+            | None -> tokens, None
+        let tokens = expect TokSemicolon tokens
+        Some(tokens, ThrowStmt exprOpt)
     | _ -> None
 
 and private parseStatement tokens =
@@ -659,6 +743,17 @@ and private parseCompoundStmt tokens =
     let tokens = loop tokens
     let tokens = expect TokRBrace tokens
     tokens, CompoundStmt(List.ofSeq items)
+
+and private parseExceptionHandlerOpt tokens =
+    match tokens with
+    | { value = TokCatch } :: tokens ->
+        let tokens, expr = parseExprBetweenParens tokens
+        let tokens, stmt = parseCompoundStmt tokens
+        Some(tokens, CatchHandler(expr, stmt))
+    | { value = TokFinally } :: tokens ->
+        let tokens, stmt = parseCompoundStmt tokens
+        Some(tokens, FinallyHandler stmt)
+    | _ -> None
 
 let private parseParamOpt tokens =
     match tokens with
@@ -712,6 +807,5 @@ let parse path =
         | Some(tokens, def) ->
             defs.Add(def)
             loop tokens
-        | None -> defs
+        | None -> List.ofSeq defs
     loop tokens
-    |> List.ofSeq
