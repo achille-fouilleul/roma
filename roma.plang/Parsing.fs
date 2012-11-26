@@ -2,6 +2,8 @@
 
 open Roma.Plang.Scanning
 
+type private List<'t> = System.Collections.Generic.List<'t>
+
 type UnOp =
     | OpPostIncr
     | OpPostDecr
@@ -92,6 +94,14 @@ and TypeExpr =
     | FunctionType of TypeExpr * TypeExpr list
     | TypeName of string
 
+type EnumDef =
+    {
+        name : string
+        pos : SourcePosition
+        underlyingType : TypeExpr
+        values : (string * Expr option) list
+    }
+
 type StructDef =
     {
         name : string
@@ -145,7 +155,7 @@ type FunDef =
     }
 
 type TopLevelDef =
-    // TODO: enum
+    | TopEnum of EnumDef
     | TopStruct of StructDef
     | TopFun of FunDef
     | TopVar of VarDef
@@ -172,7 +182,7 @@ let parseList parseItemOpt itemDesc sep (tokens : Token list) =
     match parseItemOpt tokens with
     | None -> tokens, []
     | Some(tokens, first) ->
-        let buf = System.Collections.Generic.List<_>()
+        let buf = List<_>()
         buf.Add(first)
         let rec loop tokens =
             match tokens with
@@ -378,7 +388,7 @@ and private parsePostfixExprOpt tokens =
                 loop(tokens, UnExpr(postIncrOpMap.[value], expr))
             | { value = TokLBrace } :: tokens ->
                 let tokens, inits = 
-                    let xs = System.Collections.Generic.List<_>()
+                    let xs = List<_>()
                     let rec loop tokens =
                         match tokens with
                         | { value = TokPeriod } :: { value = TokId name } :: { value = TokEq } :: tokens ->
@@ -541,6 +551,36 @@ and private parseAbstractParamOpt tokens =
         Some(tokens, paramType)
     | _ -> parseTypeExprOpt tokens
 
+let private parseEnumValueOpt tokens =
+    match tokens with
+    | { value = TokId name } :: tokens ->
+        let tokens, exprOpt =
+            match tokens with
+            | { value = TokEq } :: tokens ->
+                let tokens, expr = parseExpr tokens
+                tokens, Some expr
+            | _ -> tokens, None
+        Some(tokens, (name, exprOpt))
+    | _ -> None
+
+let private parseEnumOpt tokens =
+    match tokens with
+    | { value = TokEnum } :: tokens ->
+        let tokens, name, pos = expectId tokens
+        let tokens, typeExpr = parseTypeAnnotation tokens
+        let tokens = expect TokLBrace tokens
+        let tokens, values = parseList parseEnumValueOpt "enum value" TokComma tokens
+        let tokens = expect TokRBrace tokens
+        let enumDef : EnumDef =
+            {
+                name = name
+                pos = pos
+                underlyingType = typeExpr
+                values = values
+            }
+        Some(tokens, enumDef)
+    | _ -> None
+
 let private parseStructOpt tokens =
     match tokens with
     | { value = TokStruct } :: tokens ->
@@ -552,7 +592,7 @@ let private parseStructOpt tokens =
                 tokens, Some name
             | _ -> tokens, None
         let tokens = expect TokLBrace tokens
-        let fields = System.Collections.Generic.List<_>()
+        let fields = List<_>()
         let rec loop tokens =
             match tokens with
             | { value = TokId name; pos = pos (* TODO: use pos *) } :: tokens ->
@@ -699,7 +739,7 @@ let rec private parseStatementOpt tokens =
         Some(tokens, ReturnStmt exprOpt)
     | { value = TokTry } :: tokens ->
         let tokens, stmt = parseCompoundStmt tokens
-        let handlers = System.Collections.Generic.List<_>()
+        let handlers = List<_>()
         let rec loop tokens =
             match parseExceptionHandlerOpt tokens with
             | None ->
@@ -733,7 +773,7 @@ and private parseBlockItemOpt tokens =
 
 and private parseCompoundStmt tokens =
     let tokens = expect TokLBrace tokens
-    let items = System.Collections.Generic.List<_>()
+    let items = List<_>()
     let rec loop tokens =
         match parseBlockItemOpt tokens with
         | None -> tokens
@@ -792,6 +832,7 @@ let private parseFunOpt tokens =
 let private parseTopLevelDefOpt tokens =
     match tokens with
     | [] -> None
+    | ParseOpt parseEnumOpt (tokens, enumDef) -> Some(tokens, TopEnum enumDef)
     | ParseOpt parseStructOpt (tokens, structDef) -> Some(tokens, TopStruct structDef)
     | ParseOpt parseVarOpt (tokens, varDef) -> Some(tokens, TopVar varDef)
     | ParseOpt parseFunOpt (tokens, funDef) -> Some(tokens, TopFun funDef)
@@ -801,7 +842,7 @@ let parse path =
     let tokens =
         Scanning.scan path
         |> List.ofSeq
-    let defs = System.Collections.Generic.List<_>()
+    let defs = List<_>()
     let rec loop tokens =
         match parseTopLevelDefOpt tokens with
         | Some(tokens, def) ->
