@@ -77,8 +77,10 @@ type Expr =
     | IdExpr of string
     | IndexExpr of Expr * Expr
     | CallExpr of Expr * Expr list
+    | MemberRefExpr of Expr * string
     | StructExpr of Expr * (string * Expr) list
     | SizeofExpr of TypeExpr
+    | CastExpr of TypeExpr * Expr
     | UnExpr of UnOp * Expr
     | BinExpr of BinOp * Expr * Expr
     | CondExpr of Expr * Expr * Expr
@@ -365,6 +367,13 @@ let rec private parsePrimaryExprOpt tokens =
         let tokens, exprs = parseList parseExprOpt "expression" TokComma tokens
         let tokens = expect TokRBrace tokens
         Some(tokens, ArrayExpr exprs)
+    | { value = TokCast } :: tokens ->
+        let tokens = expect TokLParen tokens
+        let tokens, typeExpr = parseTypeExpr tokens
+        let tokens = expect TokComma tokens
+        let tokens, expr = parseExpr tokens
+        let tokens = expect TokRParen tokens
+        Some(tokens, CastExpr(typeExpr, expr))
     | _ -> None
 
 and private parsePostfixExprOpt tokens =
@@ -381,7 +390,9 @@ and private parsePostfixExprOpt tokens =
                 let tokens, args = parseList parseExprOpt "argument" TokComma tokens
                 let tokens = expect TokRParen tokens
                 loop(tokens, CallExpr(expr, args))
-            | { value = TokPeriod } :: tokens
+            | { value = TokPeriod } :: tokens ->
+                let tokens, name, pos = expectId tokens
+                loop(tokens, MemberRefExpr(expr, name))
             | { value = TokArrow } :: tokens ->
                 raise(System.NotImplementedException()) // TODO
             | { value = value } :: tokens when postIncrOpMap.ContainsKey(value) ->
@@ -417,7 +428,7 @@ and private parseUnaryExprOpt tokens =
         | Some(tokens, expr) ->
             Some(tokens, UnExpr(preIncrOpMap.[value], expr))
     | { value = value } :: tokens when unOpMap.ContainsKey(value) ->
-        match parseCastExprOpt tokens with
+        match parseUnaryExprOpt tokens with
         | None -> errorUnexpectedStr tokens "expression"
         | Some(tokens, expr) ->
             Some(tokens, UnExpr(unOpMap.[value], expr))
@@ -429,13 +440,8 @@ and private parseUnaryExprOpt tokens =
     | _ ->
         parsePostfixExprOpt tokens
 
-and private parseCastExprOpt tokens =
-    match tokens with
-    // TODO: casts
-    | _ -> parseUnaryExprOpt tokens
-
 and private parseMulExprOpt tokens =
-    parseBinOp mulOpMap parseCastExprOpt tokens
+    parseBinOp mulOpMap parseUnaryExprOpt tokens
 
 and private parseAddExprOpt tokens =
     parseBinOp addOpMap parseMulExprOpt tokens
@@ -838,9 +844,9 @@ let private parseTopLevelDefOpt tokens =
     | ParseOpt parseFunOpt (tokens, funDef) -> Some(tokens, TopFun funDef)
     | _ -> errorUnexpectedStr tokens "top-level definition"
 
-let parse path =
+let parse path text =
     let tokens =
-        Scanning.scan path
+        Scanning.scan path text
         |> List.ofSeq
     let defs = List<_>()
     let rec loop tokens =

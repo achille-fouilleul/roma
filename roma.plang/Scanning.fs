@@ -16,6 +16,7 @@ type TokenValue =
     | TokBool
     | TokBreak
     | TokCase
+    | TokCast
     | TokCatch
     | TokChar8
     | TokChar16
@@ -58,7 +59,6 @@ type TokenValue =
     | TokVar
     | TokVoid
     | TokWhile
-    // TODO: other keywords
 
     | TokNeq
     | TokExcl
@@ -106,7 +106,6 @@ type TokenValue =
     | TokRBrace
     | TokNot
     | TokEllipsis
-    // TODO: other punctuators
 
 let tokenKindToStr tok =
     match tok with
@@ -118,6 +117,7 @@ let tokenKindToStr tok =
     | TokBool -> "'bool'"
     | TokBreak -> "'break'"
     | TokCase -> "'case'"
+    | TokCast -> "'cast'"
     | TokCatch -> "'catch'"
     | TokChar8 -> "'char8_t'"
     | TokChar16 -> "'char16_t'"
@@ -160,7 +160,6 @@ let tokenKindToStr tok =
     | TokVar -> "'var'"
     | TokVoid -> "'void'"
     | TokWhile -> "'while'"
-    // TODO: other keywords
 
     | TokNeq -> "'!='"
     | TokExcl -> "'!'"
@@ -371,6 +370,7 @@ type private Scanner(path : string, s : string) =
             | "bool" -> TokBool
             | "break" -> TokBreak
             | "case" -> TokCase
+            | "cast" -> TokCast
             | "catch" -> TokCatch
             | "char8" -> TokChar8
             | "char16" -> TokChar16
@@ -413,7 +413,6 @@ type private Scanner(path : string, s : string) =
             | "var" -> TokVar
             | "void" -> TokVoid
             | "while" -> TokWhile
-            // TODO: other reserved words
             | s -> TokId s
         this.YieldToken(kind)
 
@@ -539,8 +538,5 @@ let private normalizeEols (text : string) =
     loop 0
     buf.ToString()
 
-let scan path =
-    let text =
-        System.IO.File.ReadAllText(path)
-        |> normalizeEols
-    Scanner(path, text).Run()
+let scan path text =
+    Scanner(path, normalizeEols text).Run()
