@@ -101,7 +101,7 @@ type EnumDef =
         name : string
         pos : SourcePosition
         underlyingType : TypeExpr
-        values : (string * Expr option) list
+        values : (string * SourcePosition * Expr option) list
     }
 
 type StructDef =
@@ -109,7 +109,7 @@ type StructDef =
         name : string
         pos : SourcePosition
         baseName : string option
-        fields : (string * TypeExpr) list
+        fields : (string * SourcePosition * TypeExpr) list
     }
 
 type VarDef =
@@ -288,7 +288,6 @@ type private Parser(path : string) =
     let errorUnexpectedStr actToks (expStr : string) =
         match actToks with
         | [] ->
-            // TODO: include file name in error message
             error None (sprintf "Unexpected end of file; expected %s." expStr)
         | (actTok : Token) :: _ ->
             error (Some actTok.pos) (sprintf "expected %s; got %s." expStr (tokenKindToStr actTok.value))
@@ -564,14 +563,14 @@ type private Parser(path : string) =
 
     let parseEnumValueOpt tokens =
         match tokens with
-        | { value = TokId name } :: tokens ->
+        | { value = TokId name; pos = pos } :: tokens ->
             let tokens, exprOpt =
                 match tokens with
                 | { value = TokEq } :: tokens ->
                     let tokens, expr = parseExpr tokens
                     tokens, Some expr
                 | _ -> tokens, None
-            Some(tokens, (name, exprOpt))
+            Some(tokens, (name, pos, exprOpt))
         | _ -> None
 
     let parseEnumOpt tokens =
@@ -606,9 +605,9 @@ type private Parser(path : string) =
             let fields = List<_>()
             let rec loop tokens =
                 match tokens with
-                | { value = TokId name; pos = pos (* TODO: use pos *) } :: tokens ->
+                | { value = TokId name; pos = pos } :: tokens ->
                     let tokens, typeExpr = parseTypeAnnotation tokens
-                    fields.Add(name, typeExpr)
+                    fields.Add((name, pos, typeExpr))
                     let tokens = expect TokSemicolon tokens
                     loop tokens
                 | _ -> tokens
