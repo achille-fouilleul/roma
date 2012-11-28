@@ -94,7 +94,7 @@ and TypeExpr =
     | ByRefType of TypeExpr * bool (* readonly *)
     | ArrayType of TypeExpr * Expr option
     | FunctionType of TypeExpr * TypeExpr list
-    | TypeName of string
+    | NamedType of string
 
 type EnumDef =
     {
@@ -110,6 +110,13 @@ type StructDef =
         pos : SourcePosition
         baseName : string option
         fields : (string * SourcePosition * TypeExpr) list
+    }
+
+type TypeAliasDef =
+    {
+        name : string
+        pos : SourcePosition
+        typeExpr : TypeExpr
     }
 
 type VarDef =
@@ -159,8 +166,9 @@ type FunDef =
 type TopLevelDef =
     | TopEnum of EnumDef
     | TopStruct of StructDef
-    | TopFun of FunDef
+    | TopTypeAlias of TypeAliasDef
     | TopVar of VarDef
+    | TopFun of FunDef
 
 let private (|ParseOpt|_|) f (tokens : Token list) =
     f tokens
@@ -535,7 +543,7 @@ type private Parser(path : string) =
             let tokens, retType = parseTypeAnnotation tokens
             Some(tokens, TypeExpr.FunctionType(retType, paramTypes))
         | { value = TokId name } :: tokens ->
-            Some(tokens, TypeExpr.TypeName name)
+            Some(tokens, TypeExpr.NamedType name)
         | _ -> None
 
     and parseTypeExpr tokens =
@@ -839,6 +847,22 @@ type private Parser(path : string) =
             Some(tokens, funDef)
         | _ -> None
 
+    let parseTypeAliasOpt tokens =
+        match tokens with
+        | { value = TokType } :: tokens ->
+            let tokens, name, pos = expectId tokens
+            let tokens = expect TokEq tokens
+            let tokens, typeExpr = parseTypeExpr tokens
+            let tokens = expect TokSemicolon tokens
+            let typeAliasDef : TypeAliasDef =
+                {
+                    name = name
+                    pos = pos
+                    typeExpr = typeExpr
+                }
+            Some(tokens, typeAliasDef)
+        | _ -> None
+
     let parseTopLevelDefOpt tokens =
         match tokens with
         | [] -> None
@@ -846,6 +870,7 @@ type private Parser(path : string) =
         | ParseOpt parseStructOpt (tokens, structDef) -> Some(tokens, TopStruct structDef)
         | ParseOpt parseVarOpt (tokens, varDef) -> Some(tokens, TopVar varDef)
         | ParseOpt parseFunOpt (tokens, funDef) -> Some(tokens, TopFun funDef)
+        | ParseOpt parseTypeAliasOpt (tokens, typeAliasDef) -> Some(tokens, TopTypeAlias typeAliasDef)
         | _ -> errorUnexpectedStr tokens "top-level definition"
 
     member this.Run(tokens) =

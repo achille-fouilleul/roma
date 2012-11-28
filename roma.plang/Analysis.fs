@@ -36,6 +36,7 @@ let checkTopLevelConflicts (defs : TopLevelDef list) =
                 | TopStruct structDef -> structDef.name, structDef.pos, "struct"
                 | TopFun funDef -> funDef.name, funDef.pos, "function"
                 | TopVar varDef -> varDef.name, varDef.pos, "variable"
+                | TopTypeAlias typeAliasDef -> typeAliasDef.name, typeAliasDef.pos, "type alias"
         }
         |> Seq.groupBy (fun (name, _, _) -> name)
 

@@ -49,6 +49,7 @@ type TokenValue =
     | TokThrow
     | TokTrue
     | TokTry
+    | TokType
     | TokUInt8
     | TokUInt16
     | TokUInt32
@@ -150,6 +151,7 @@ let tokenKindToStr tok =
     | TokThrow -> "'throw'"
     | TokTrue -> "'true'"
     | TokTry -> "'try'"
+    | TokType -> "'type'"
     | TokUInt8 -> "'uint8_t'"
     | TokUInt16 -> "'uint16_t'"
     | TokUInt32 -> "'uint32_t'"
@@ -403,6 +405,7 @@ type private Scanner(path : string, s : string) =
             | "throw" -> TokThrow
             | "true" -> TokTrue
             | "try" -> TokTry
+            | "type" -> TokType
             | "uint8" -> TokUInt8
             | "uint16" -> TokUInt16
             | "uint32" -> TokUInt32
