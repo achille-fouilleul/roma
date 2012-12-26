@@ -21,6 +21,7 @@ type TokenValue =
     | TokChar8
     | TokChar16
     | TokChar32
+    | TokConst
     | TokContinue
     | TokDefault
     | TokDo
@@ -123,6 +124,7 @@ let tokenKindToStr tok =
     | TokChar8 -> "'char8_t'"
     | TokChar16 -> "'char16_t'"
     | TokChar32 -> "'char32_t'"
+    | TokConst -> "'const'"
     | TokContinue -> "'continue'"
     | TokDefault -> "'default'"
     | TokDo -> "'do'"
@@ -377,6 +379,7 @@ type private Scanner(path : string, s : string) =
             | "char8" -> TokChar8
             | "char16" -> TokChar16
             | "char32" -> TokChar32
+            | "const" -> TokConst
             | "continue" -> TokContinue
             | "default" -> TokDefault
             | "do" -> TokDo

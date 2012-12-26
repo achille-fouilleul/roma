@@ -119,11 +119,20 @@ type TypeAliasDef =
         typeExpr : TypeExpr
     }
 
+type ConstDef =
+    {
+        name : string
+        pos : SourcePosition
+        constType : TypeExpr option
+        init : Expr
+    }
+
 type VarDef =
     {
         name : string
         pos : SourcePosition
         varType : TypeExpr option
+        readonly : bool
         init : Expr option
     }
 
@@ -167,6 +176,7 @@ type TopLevelDef =
     | TopEnum of EnumDef
     | TopStruct of StructDef
     | TopTypeAlias of TypeAliasDef
+    | TopConst of ConstDef
     | TopVar of VarDef
     | TopFun of FunDef
 
@@ -631,6 +641,28 @@ type private Parser(path : string) =
             Some(tokens, structDef)
         | _ -> None
 
+    let parseConstOpt tokens =
+        match tokens with
+        | { value = TokConst } :: tokens ->
+            let tokens, name, pos = expectId tokens
+            let tokens, typeExprOpt =
+                match tokens with
+                | ParseOpt parseTypeAnnotationOpt (tokens, typeExpr) ->
+                    tokens, Some typeExpr
+                | _ -> tokens, None
+            let tokens = expect TokEq tokens
+            let tokens, init = parseExpr tokens
+            let tokens = expect TokSemicolon tokens
+            let constDef : ConstDef =
+                {
+                    name = name
+                    pos = pos
+                    constType = typeExprOpt
+                    init = init
+                }
+            Some(tokens, constDef)
+        | _ -> None
+
     let parseVarOpt tokens =
         match tokens with
         | { value = TokVar } :: tokens ->
@@ -653,6 +685,7 @@ type private Parser(path : string) =
                     name = name
                     pos = pos
                     varType = typeExprOpt
+                    readonly = ro
                     init = initOpt
                 }
             Some(tokens, varDef)
@@ -868,6 +901,7 @@ type private Parser(path : string) =
         | [] -> None
         | ParseOpt parseEnumOpt (tokens, enumDef) -> Some(tokens, TopEnum enumDef)
         | ParseOpt parseStructOpt (tokens, structDef) -> Some(tokens, TopStruct structDef)
+        | ParseOpt parseConstOpt (tokens, constDef) -> Some(tokens, TopConst constDef)
         | ParseOpt parseVarOpt (tokens, varDef) -> Some(tokens, TopVar varDef)
         | ParseOpt parseFunOpt (tokens, funDef) -> Some(tokens, TopFun funDef)
         | ParseOpt parseTypeAliasOpt (tokens, typeAliasDef) -> Some(tokens, TopTypeAlias typeAliasDef)

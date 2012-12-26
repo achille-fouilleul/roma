@@ -35,6 +35,7 @@ let checkTopLevelConflicts (defs : TopLevelDef list) =
                 | TopEnum enumDef -> enumDef.name, enumDef.pos, "enum"
                 | TopStruct structDef -> structDef.name, structDef.pos, "struct"
                 | TopFun funDef -> funDef.name, funDef.pos, "function"
+                | TopConst constDef -> constDef.name, constDef.pos, "constant"
                 | TopVar varDef -> varDef.name, varDef.pos, "variable"
                 | TopTypeAlias typeAliasDef -> typeAliasDef.name, typeAliasDef.pos, "type alias"
         }
