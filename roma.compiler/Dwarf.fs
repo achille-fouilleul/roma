@@ -160,6 +160,24 @@ type DwAt =
     | EnumClass = 0x6d
     | LinkageName = 0x6e
 
+type DwAte =
+    | Address = 0x01
+    | Boolean = 0x02
+    | ComplexFloat = 0x03
+    | Float = 0x04
+    | Signed = 0x05
+    | SignedChar = 0x06
+    | Unsigned = 0x07
+    | UnsignedChar = 0x08
+    | ImaginaryFloat = 0x09
+    | PackedDecimal = 0x0a
+    | NumericString = 0x0b
+    | Edited = 0x0c
+    | SignedFixed = 0x0d
+    | UnsignedFixed = 0x0e
+    | DecimalFloat = 0x0f
+    | Utf = 0x10
+
 type DwForm =
     | Addr = 0x01
     | Block2 = 0x03

@@ -1,5 +1,6 @@
 ﻿module Roma.Plang.Parsing
 
+open Roma.Compiler
 open Roma.Plang.Scanning
 
 type private List<'t> = System.Collections.Generic.List<'t>
@@ -48,25 +49,6 @@ type AssignOp =
     | OpAndAssign
     | OpOrAssign
     | OpXorAssign
-
-type PrimitiveTypeKind =
-    | Bool
-    | Null
-    | Char8
-    | Char16
-    | Char32
-    | SInt8
-    | SInt16
-    | SInt32
-    | SInt64
-    | SIntPtr
-    | UInt8
-    | UInt16
-    | UInt32
-    | UInt64
-    | UIntPtr
-    | Float32
-    | Float64
 
 type Expr =
     | NullExpr

@@ -1,5 +1,6 @@
 ﻿module Roma.Plang.Analysis
 
+open Roma.Compiler
 open Scanning
 open Parsing
 
@@ -53,54 +54,36 @@ let checkTopLevelConflicts (defs : TopLevelDef list) =
                     diag.Error(pos, sprintf "'%s' redeclared as %s here." name desc)
     diag.Report()
 
-type Constant =
-    | SInt8 of int8
-    | SInt16 of int16
-    | SInt32 of int32
-    | SInt64 of int64
-    | UInt8 of uint8
-    | UInt16 of uint16
-    | UInt32 of uint32
-    | UInt64 of uint64
+let private isValidIntegerConstantPrimitiveTypeKind kind =
+    // TODO: consider including bool, char{8,16,32}...
+    match kind with
+    | SInt8 | SInt16 | SInt32 | SInt64
+    | UInt8 | UInt16 | UInt32 | UInt64 -> true
+    | _ -> false
 
-let private createZeroConstant typeExpr =
-    match typeExpr with
-    | PrimitiveType PrimitiveTypeKind.SInt8 -> Constant.SInt8 0y
-    | PrimitiveType PrimitiveTypeKind.SInt16 -> Constant.SInt16 0s
-    | PrimitiveType PrimitiveTypeKind.SInt32 -> Constant.SInt32 0
-    | PrimitiveType PrimitiveTypeKind.SInt64 -> Constant.SInt64 0L
-    | PrimitiveType PrimitiveTypeKind.UInt8 -> Constant.UInt8 0uy
-    | PrimitiveType PrimitiveTypeKind.UInt16 -> Constant.UInt16 0us
-    | PrimitiveType PrimitiveTypeKind.UInt32 -> Constant.UInt32 0u
-    | PrimitiveType PrimitiveTypeKind.UInt64 -> Constant.UInt64 0UL
-    | _ ->
-        // TODO: consider including bool, char{8,16,32}...
-        // TODO: report error
-        failwith "Type is not valid as underlying enum type."
+type IntegerConstant(kind : PrimitiveTypeKind, value : Int128) =
+    do
+        if not(isValidIntegerConstantPrimitiveTypeKind kind) then
+            failwith "Invalid type for integer constant."
+        let lo, hi =
+            match kind with
+            | SInt8 -> Int128(int64(System.SByte.MinValue)), Int128(int64(System.SByte.MaxValue))
+            | SInt16 -> Int128(int64(System.Int16.MinValue)), Int128(int64(System.Int16.MaxValue))
+            | SInt32 -> Int128(int64(System.Int32.MinValue)), Int128(int64(System.Int32.MaxValue))
+            | SInt64 -> Int128(int64(System.Int64.MinValue)), Int128(int64(System.Int64.MaxValue))
+            | UInt8 -> Int128.Zero, Int128(uint64(System.Byte.MaxValue))
+            | UInt16 -> Int128.Zero, Int128(uint64(System.UInt16.MaxValue))
+            | UInt32 -> Int128.Zero, Int128(uint64(System.UInt32.MaxValue))
+            | UInt64 -> Int128.Zero, Int128(uint64(System.UInt64.MaxValue))
+            | _ -> raise(System.NotSupportedException())
+        if not(value >= lo && value <= hi) then
+            failwith "Overflow."
 
-let private constToSInt64 value =
-    // TODO: report error
-    match value with
-    | Constant.SInt8 x -> int64 x
-    | Constant.SInt16 x -> int64 x
-    | Constant.SInt32 x -> int64 x
-    | Constant.SInt64 x -> int64 x
-    | Constant.UInt8 x -> Checked.int64 x
-    | Constant.UInt16 x -> Checked.int64 x
-    | Constant.UInt32 x -> Checked.int64 x
-    | Constant.UInt64 x -> Checked.int64 x
+    member this.Kind = kind
+    member this.Value = value
 
-let private constToUInt64 value =
-    // TODO: report error
-    match value with
-    | Constant.SInt8 x -> Checked.uint64 x
-    | Constant.SInt16 x -> Checked.uint64 x
-    | Constant.SInt32 x -> Checked.uint64 x
-    | Constant.SInt64 x -> Checked.uint64 x
-    | Constant.UInt8 x -> uint64 x
-    | Constant.UInt16 x -> uint64 x
-    | Constant.UInt32 x -> uint64 x
-    | Constant.UInt64 x -> uint64 x
+    static member IsValidKind(kind : PrimitiveTypeKind) =
+        isValidIntegerConstantPrimitiveTypeKind kind
 
 let private minSInt32 = bigint(System.Int32.MinValue)
 let private maxSInt32 = bigint(System.Int32.MaxValue)
@@ -115,13 +98,13 @@ let private strToConstant (s : string) =
     | true, value ->
         match value with
         | value when value >= minSInt32 && value <= maxSInt32 ->
-            Constant.SInt32(int32(value))
+            IntegerConstant(SInt32, Int128 value)
         | value when value >= 0I && value <= maxUInt32 ->
-            Constant.UInt32(uint32(value))
+            IntegerConstant(UInt32, Int128 value)
         | value when value >= minSInt64 && value <= maxSInt64 ->
-            Constant.SInt64(int64(value))
+            IntegerConstant(SInt64, Int128 value)
         | value when value >= 0I && value <= maxUInt64 ->
-            Constant.UInt64(uint64(value))
+            IntegerConstant(UInt64, Int128 value)
         | _ ->
             failwith "Cannot represent integer literal."
     | _ ->
@@ -131,39 +114,6 @@ let rec private evalConstExpr expr =
     match expr with
     | NumberExpr s -> strToConstant s
     | _ -> raise(System.NotImplementedException()) // TODO
-
-let private constImplicitConv typeExpr value =
-    // TODO: report error
-    match typeExpr with
-    | PrimitiveType PrimitiveTypeKind.SInt8 ->
-        Constant.SInt8(Checked.sbyte(constToSInt64 value))
-    | PrimitiveType PrimitiveTypeKind.SInt16 ->
-        Constant.SInt16(Checked.int16(constToSInt64 value))
-    | PrimitiveType PrimitiveTypeKind.SInt32 ->
-        Constant.SInt32(Checked.int32(constToSInt64 value))
-    | PrimitiveType PrimitiveTypeKind.SInt64 ->
-        Constant.SInt64(Checked.int64(constToSInt64 value))
-    | PrimitiveType PrimitiveTypeKind.UInt8 ->
-        Constant.UInt8(Checked.byte(constToUInt64 value))
-    | PrimitiveType PrimitiveTypeKind.UInt16 ->
-        Constant.UInt16(Checked.uint16(constToUInt64 value))
-    | PrimitiveType PrimitiveTypeKind.UInt32 ->
-        Constant.UInt32(Checked.uint32(constToUInt64 value))
-    | PrimitiveType PrimitiveTypeKind.UInt64 ->
-        Constant.UInt64(Checked.uint64(constToUInt64 value))
-    | _ -> failwith "internal error"
-
-let private incrConstant value =
-    // TODO: report error
-    match value with
-    | Constant.SInt8 n -> Constant.SInt8(Checked.(+) n 1y)
-    | Constant.SInt16 n -> Constant.SInt16(Checked.(+) n 1s)
-    | Constant.SInt32 n -> Constant.SInt32(Checked.(+) n 1)
-    | Constant.SInt64 n -> Constant.SInt64(Checked.(+) n 1L)
-    | Constant.UInt8 n -> Constant.UInt8(Checked.(+) n 1uy)
-    | Constant.UInt16 n -> Constant.UInt16(Checked.(+) n 1us)
-    | Constant.UInt32 n -> Constant.UInt32(Checked.(+) n 1u)
-    | Constant.UInt64 n -> Constant.UInt64(Checked.(+) n 1UL)
 
 let createEnumMap (defs : TopLevelDef list) =
     seq {
@@ -187,7 +137,15 @@ let createEnumMap (defs : TopLevelDef list) =
                 )
                 diag.Report()
 
-                let index = ref(createZeroConstant enumDef.underlyingType)
+                let underlyingType =
+                    // TODO: eval type expr
+                    match enumDef.underlyingType with
+                    | PrimitiveType kind when IntegerConstant.IsValidKind kind -> kind
+                    | _ ->
+                        // TODO: report error
+                        failwith "Type is not valid as underlying enum type."
+
+                let index = ref(IntegerConstant(underlyingType, Int128.Zero))
                 let values =
                     seq {
                         for name, pos, exprOpt in enumDef.values do
@@ -195,13 +153,15 @@ let createEnumMap (defs : TopLevelDef list) =
                                 match exprOpt with
                                 | None -> !index
                                 | Some expr ->
-                                    evalConstExpr expr
-                                    |> constImplicitConv enumDef.underlyingType
-                            yield name, value
-                            index := incrConstant value
+                                    let value = evalConstExpr expr
+                                    // TODO: report error (overflow)
+                                    IntegerConstant(underlyingType, value.Value)
+                            yield name, value.Value
+                            // TODO: report error (overflow)
+                            index := IntegerConstant(underlyingType, value.Value + Int128.One)
                     }
                     |> Map.ofSeq
-                yield enumDef.name, values
+                yield enumDef.name, (underlyingType, values)
 
             | _ -> ()
     }
