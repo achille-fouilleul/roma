@@ -262,7 +262,6 @@ and DwValue =
     | Sdata of Int128
     | Udata of UInt128
     | String of string
-    | U8 of uint8
     | Ref of DwNode
 
 let private section name =
@@ -295,7 +294,6 @@ let serialize addrSize root =
         | DwValue.Sdata _ -> DwForm.Sdata
         | DwValue.Udata _ -> DwForm.Udata
         | DwValue.String _ -> DwForm.Strp // TODO: or String
-        | DwValue.U8 _ -> DwForm.Data1
         | DwValue.Ref _ ->
             match addrSize with
             | Addr32 -> DwForm.Ref4
@@ -346,7 +344,6 @@ let serialize addrSize root =
                 | DwValue.Udata x -> yield Asm.Uleb128 x
                 | DwValue.Sdata x -> yield Asm.Sleb128 x
                 | DwValue.String s -> yield Asm.Expr32(labelOfString s)
-                | DwValue.U8 x -> yield Asm.U8 x
                 | DwValue.Ref node ->
                     let label = nodeLabelMap.[node]
                     match addrSize with

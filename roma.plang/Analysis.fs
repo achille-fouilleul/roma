@@ -116,53 +116,55 @@ let rec private evalConstExpr expr =
     | _ -> raise(System.NotImplementedException()) // TODO
 
 let createEnumMap (defs : TopLevelDef list) =
+    let enumDefs =
+        defs
+        |> Seq.choose (
+            function
+            | TopEnum enumDef -> Some enumDef
+            | _ -> None
+        )
     seq {
-        for def in defs do
-            match def with
-            | TopEnum enumDef ->
+        for enumDef in enumDefs ->
+            let diag = Diagnostics()
+            enumDef.values
+            |> Seq.groupBy (fun (name, _, _) -> name)
+            |> Seq.iter (
+                fun (name, xs) ->
+                    let xs = Array.ofSeq xs
+                    if xs.Length > 1 then
+                        for i = 0 to xs.Length - 1 do
+                            let (_, pos, desc) = xs.[i]
+                            if i = 0 then
+                                diag.Error(pos, sprintf "'%s' declared here." name)
+                            else
+                                diag.Error(pos, sprintf "'%s' redeclared here." name)
+            )
+            diag.Report()
 
-                let diag = Diagnostics()
-                enumDef.values
-                |> Seq.groupBy (fun (name, _, _) -> name)
-                |> Seq.iter (
-                    fun (name, xs) ->
-                        let xs = Array.ofSeq xs
-                        if xs.Length > 1 then
-                            for i = 0 to xs.Length - 1 do
-                                let (_, pos, desc) = xs.[i]
-                                if i = 0 then
-                                    diag.Error(pos, sprintf "'%s' declared here." name)
-                                else
-                                    diag.Error(pos, sprintf "'%s' redeclared here." name)
-                )
-                diag.Report()
+            let underlyingType =
+                // TODO: eval type expr
+                match enumDef.underlyingType with
+                | PrimitiveType kind when IntegerConstant.IsValidKind kind -> kind
+                | _ ->
+                    // TODO: report error
+                    failwith "Type is not valid as underlying enum type."
 
-                let underlyingType =
-                    // TODO: eval type expr
-                    match enumDef.underlyingType with
-                    | PrimitiveType kind when IntegerConstant.IsValidKind kind -> kind
-                    | _ ->
-                        // TODO: report error
-                        failwith "Type is not valid as underlying enum type."
-
-                let index = ref(IntegerConstant(underlyingType, Int128.Zero))
-                let values =
-                    seq {
-                        for name, pos, exprOpt in enumDef.values do
-                            let value =
-                                match exprOpt with
-                                | None -> !index
-                                | Some expr ->
-                                    let value = evalConstExpr expr
-                                    // TODO: report error (overflow)
-                                    IntegerConstant(underlyingType, value.Value)
-                            yield name, value.Value
-                            // TODO: report error (overflow)
-                            index := IntegerConstant(underlyingType, value.Value + Int128.One)
-                    }
-                    |> Map.ofSeq
-                yield enumDef.name, (underlyingType, values)
-
-            | _ -> ()
+            let index = ref(IntegerConstant(underlyingType, Int128.Zero))
+            let values =
+                seq {
+                    for name, pos, exprOpt in enumDef.values do
+                        let value =
+                            match exprOpt with
+                            | None -> !index
+                            | Some expr ->
+                                let value = evalConstExpr expr
+                                // TODO: report error (overflow)
+                                IntegerConstant(underlyingType, value.Value)
+                        yield name, value.Value
+                        // TODO: report error (overflow)
+                        index := IntegerConstant(underlyingType, value.Value + Int128.One)
+                }
+                |> Map.ofSeq
+            enumDef.name, (underlyingType, values)
     }
     |> Map.ofSeq

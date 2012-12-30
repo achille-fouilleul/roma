@@ -376,9 +376,9 @@ type private Scanner(path : string, s : string) =
             | "case" -> TokCase
             | "cast" -> TokCast
             | "catch" -> TokCatch
-            | "char8" -> TokChar8
-            | "char16" -> TokChar16
-            | "char32" -> TokChar32
+            | "char8_t" -> TokChar8
+            | "char16_t" -> TokChar16
+            | "char32_t" -> TokChar32
             | "const" -> TokConst
             | "continue" -> TokContinue
             | "default" -> TokDefault
@@ -387,8 +387,8 @@ type private Scanner(path : string, s : string) =
             | "enum" -> TokEnum
             | "false" -> TokFalse
             | "finally" -> TokFinally
-            | "float32" -> TokFloat32
-            | "float64" -> TokFloat64
+            | "float32_t" -> TokFloat32
+            | "float64_t" -> TokFloat64
             | "for" -> TokFor
             | "fun" -> TokFun
             | "goto" -> TokGoto
@@ -397,11 +397,11 @@ type private Scanner(path : string, s : string) =
             | "null_t" -> TokNull_t
             | "readonly" -> TokReadonly
             | "return" -> TokReturn
-            | "sint8" -> TokSInt8
-            | "sint16" -> TokSInt16
-            | "sint32" -> TokSInt32
-            | "sint64" -> TokSInt64
-            | "sintptr" -> TokSIntPtr
+            | "sint8_t" -> TokSInt8
+            | "sint16_t" -> TokSInt16
+            | "sint32_t" -> TokSInt32
+            | "sint64_t" -> TokSInt64
+            | "sintptr_t" -> TokSIntPtr
             | "sizeof" -> TokSizeof
             | "struct" -> TokStruct
             | "switch" -> TokSwitch
@@ -409,11 +409,11 @@ type private Scanner(path : string, s : string) =
             | "true" -> TokTrue
             | "try" -> TokTry
             | "type" -> TokType
-            | "uint8" -> TokUInt8
-            | "uint16" -> TokUInt16
-            | "uint32" -> TokUInt32
-            | "uint64" -> TokUInt64
-            | "uintptr" -> TokUIntPtr
+            | "uint8_t" -> TokUInt8
+            | "uint16_t" -> TokUInt16
+            | "uint32_t" -> TokUInt32
+            | "uint64_t" -> TokUInt64
+            | "uintptr_t" -> TokUIntPtr
             | "union" -> TokUnion
             | "using" -> TokUsing
             | "var" -> TokVar

@@ -3,7 +3,7 @@
 open Roma.Compiler
 open Roma.Plang.Scanning
 
-type private List<'t> = System.Collections.Generic.List<'t>
+type private MutableList<'t> = System.Collections.Generic.List<'t>
 
 type UnOp =
     | OpPostIncr
@@ -299,7 +299,7 @@ type private Parser(path : string) =
         match parseItemOpt tokens with
         | None -> tokens, []
         | Some(tokens, first) ->
-            let buf = List<_>()
+            let buf = MutableList<_>()
             buf.Add(first)
             let rec loop tokens =
                 match tokens with
@@ -403,7 +403,7 @@ type private Parser(path : string) =
                     loop(tokens, UnExpr(postIncrOpMap.[value], expr))
                 | { value = TokLBrace } :: tokens ->
                     let tokens, inits = 
-                        let xs = List<_>()
+                        let xs = MutableList<_>()
                         let rec loop tokens =
                             match tokens with
                             | { value = TokPeriod } :: { value = TokId name } :: { value = TokEq } :: tokens ->
@@ -602,7 +602,7 @@ type private Parser(path : string) =
                     tokens, Some name
                 | _ -> tokens, None
             let tokens = expect TokLBrace tokens
-            let fields = List<_>()
+            let fields = MutableList<_>()
             let rec loop tokens =
                 match tokens with
                 | { value = TokId name; pos = pos } :: tokens ->
@@ -772,7 +772,7 @@ type private Parser(path : string) =
             Some(tokens, ReturnStmt exprOpt)
         | { value = TokTry } :: tokens ->
             let tokens, stmt = parseCompoundStmt tokens
-            let handlers = List<_>()
+            let handlers = MutableList<_>()
             let rec loop tokens =
                 match parseExceptionHandlerOpt tokens with
                 | None ->
@@ -806,7 +806,7 @@ type private Parser(path : string) =
 
     and parseCompoundStmt tokens =
         let tokens = expect TokLBrace tokens
-        let items = List<_>()
+        let items = MutableList<_>()
         let rec loop tokens =
             match parseBlockItemOpt tokens with
             | None -> tokens
@@ -890,7 +890,7 @@ type private Parser(path : string) =
         | _ -> errorUnexpectedStr tokens "top-level definition"
 
     member this.Run(tokens) =
-        let defs = List<_>()
+        let defs = MutableList<_>()
         let rec loop tokens =
             match parseTopLevelDefOpt tokens with
             | Some(tokens, def) ->
