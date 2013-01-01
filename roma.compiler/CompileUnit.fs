@@ -35,7 +35,7 @@ type TypeEntry internal (tree : DwTree) =
 
     abstract member Node : DwNode
 
-type PrimitiveTypeEntry internal (tree, name : string, encoding : DwAte, byteSize : uint32) =
+type PrimitiveTypeEntry internal (tree, kind, name, encoding : DwAte, byteSize : uint32) =
 
     inherit TypeEntry(tree)
 
@@ -48,11 +48,14 @@ type PrimitiveTypeEntry internal (tree, name : string, encoding : DwAte, byteSiz
                 yield DwAt.ByteSize, DwValue.Udata(UInt128 byteSize)
             ])
 
-    member this.ByteSize = byteSize
-
     override this.Node = node
 
-type EnumTypeEntry internal (tree, name : string, underlyingType : PrimitiveTypeEntry) =
+    member this.Kind = kind
+
+    member this.ByteSize = byteSize
+
+
+type EnumTypeEntry internal (tree, name) =
 
     inherit TypeEntry(tree)
 
@@ -62,11 +65,15 @@ type EnumTypeEntry internal (tree, name : string, underlyingType : PrimitiveType
             [
                 DwAt.Name, DwValue.String name
                 DwAt.EnumClass, DwValue.Bool true
-                DwAt.ByteSize, DwValue.Udata(UInt128 underlyingType.ByteSize)
-                DwAt.Type, DwValue.Ref underlyingType.Node
             ])
 
     override this.Node = node
+
+    member this.SetByteSize(size : uint32) =
+        node.AddAttr(DwAt.ByteSize, DwValue.Udata(UInt128 size))
+
+    member this.SetUnderlyingType(underlyingType : TypeEntry) =
+        node.AddAttr(DwAt.Type, DwValue.Ref underlyingType.Node)
 
     member this.AddValue(name, value) =
         let child =
@@ -116,9 +123,9 @@ type StructTypeEntry internal (tree, name : string) =
         node.AddChild(child)
 
     member this.AddMember(name, memberType) =
-        let ``member`` = Member(tree, name, memberType)
-        members.Add(``member``)
-        node.AddChild(``member``.Node)
+        let mem = Member(tree, name, memberType)
+        members.Add(mem)
+        node.AddChild(mem.Node)
 
 type TypedefEntry internal (tree, name) =
     inherit TypeEntry(tree)
@@ -126,11 +133,17 @@ type TypedefEntry internal (tree, name) =
     let node =
         tree.Create(DwTag.Typedef, [ DwAt.Name, DwValue.String name ])
 
+    let mutable referencedType = None
+
     override this.Node = node
 
-    member this.SetReferencedType(typeOpt) =
-        for at, value in TypeEntry.Attr typeOpt do
-            node.AddAttr(at, value)
+    member this.ReferencedType
+        with get() = referencedType
+
+        and set (typeOpt) = 
+            referencedType <- typeOpt
+            for at, value in TypeEntry.Attr typeOpt do
+                node.AddAttr(at, value)
 
 type ConstTypeEntry internal (tree, t) =
     inherit TypeEntry(tree)
@@ -179,6 +192,7 @@ type ArrayTypeEntry internal (tree, sizeType : TypeEntry, t, sizeOpt) =
             [
                 yield! TypeEntry.Attr t
             ])
+
     do
         for size in Option.toArray sizeOpt do
             assert(size >= 1u)
@@ -203,6 +217,7 @@ type SubroutineTypeEntry internal (tree, retType, paramTypes) =
                 yield DwAt.Prototyped, DwValue.Bool true
                 yield! TypeEntry.Attr retType
             ])
+
     do
         for paramType in paramTypes do
             let child =
@@ -218,7 +233,7 @@ type SubroutineTypeEntry internal (tree, retType, paramTypes) =
 type INamespace =
     abstract GetNamespace : string -> INamespace
     abstract FindType : string -> TypeEntry
-    abstract CreateEnumType : (string * PrimitiveTypeEntry) -> EnumTypeEntry
+    abstract CreateEnumType : string -> EnumTypeEntry
     abstract CreateStructType : string -> StructTypeEntry
     abstract CreateTypedef : string -> TypedefEntry
 
@@ -236,8 +251,8 @@ type internal Namespace(tree : DwTree, node : DwNode) =
             this.GetNamespace(name) :> INamespace
         member this.FindType(name) =
             this.FindType(name)
-        member this.CreateEnumType(args) =
-            this.CreateEnumType(args)
+        member this.CreateEnumType(name) =
+            this.CreateEnumType(name)
         member this.CreateStructType(name) =
             this.CreateStructType(name)
         member this.CreateTypedef(name) =
@@ -256,8 +271,8 @@ type internal Namespace(tree : DwTree, node : DwNode) =
     member this.FindType(name) =
         typeMap.[name]
 
-    member this.CreateEnumType(name, underlyingType) =
-        add name (EnumTypeEntry(tree, name, underlyingType))
+    member this.CreateEnumType(name) =
+        add name (EnumTypeEntry(tree, name))
 
     member this.CreateStructType(name) =
         add name (StructTypeEntry(tree, name))
@@ -303,12 +318,12 @@ type CompileUnit(addrSize : AddrSize) =
             | PrimitiveTypeKind.UIntPtr -> "uintptr_t", DwAte.Unsigned, ptrSize
             | PrimitiveTypeKind.Float32 -> "float32_t", DwAte.Float, 4u
             | PrimitiveTypeKind.Float64 -> "float64_t", DwAte.Float, 8u
-        PrimitiveTypeEntry(tree, name, encoding, byteSize)
+        PrimitiveTypeEntry(tree, kind, name, encoding, byteSize)
 
     let sizeType =
         Lazy.Create(
             fun() ->
-                let entry = PrimitiveTypeEntry(tree, "sizetype", DwAte.Unsigned, ptrSize)
+                let entry = PrimitiveTypeEntry(tree, PrimitiveTypeKind.UIntPtr, "sizetype", DwAte.Unsigned, ptrSize)
                 node.AddChild(entry.Node)
                 entry
         )
