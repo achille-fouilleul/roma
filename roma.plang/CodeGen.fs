@@ -105,7 +105,7 @@ let run (defs : TopLevelDef list) =
             )
             diag.Report()
 
-            let underlyingTypeEntry, underlyingTypeKind, underlyingTypeSize =
+            let underlyingTypeEntry, (underlyingTypeKind, underlyingTypeSize) =
                 let error() =
                     // TODO: report error
                     failwith "Type is not valid as underlying enum type."
@@ -124,9 +124,7 @@ let run (defs : TopLevelDef list) =
                     | _ -> error()
 
                 match evalTypeExpr enumDef.underlyingType with
-                | Some entry0 ->
-                    let kind, size = follow entry0
-                    entry0, kind, size
+                | Some entry0 -> entry0, follow entry0
                 | None -> error()
 
             entry.SetByteSize(underlyingTypeSize)

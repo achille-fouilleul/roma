@@ -84,21 +84,25 @@ let mkDependencyGraph (defs : TopLevelDef list) =
 
     // build dependency graph
 
+    let globalIdExprDeps name deps =
+        let def = Map.find name defMap // TODO: report key-not-found error
+        match def with
+        | TopEnum _ | TopFun _ | TopConst _ | TopVar _ ->
+            Set.add def deps
+        | TopStruct _ | TopTypeAlias _ ->
+            // TODO: report error
+            failwith "Id does not refer to an enum, function, constant, or variable."
+
     let rec constExprDeps locals expr deps =
         match expr with
         | NullExpr | BoolExpr _ | NumberExpr _ | StringExpr _ -> deps
         | ArrayExpr exprs -> constExprListDeps locals exprs deps
         | IdExpr name ->
             if Set.contains name locals then
-                deps
+                // TODO: report error
+                failwith "Reference to local in constant expression."
             else
-                let def = Map.find name defMap // TODO: report key-not-found error
-                match def with
-                | TopEnum _ | TopFun _ | TopConst _ | TopVar _ ->
-                    Set.add def deps
-                | TopStruct _ | TopTypeAlias _ ->
-                    // TODO: report error
-                    failwith "Id does not refer to an enum, function, constant, or variable."
+                globalIdExprDeps name deps
         | IndexExpr(arr, index) ->
             deps
             |> constExprDeps locals arr
@@ -112,10 +116,10 @@ let mkDependencyGraph (defs : TopLevelDef list) =
             deps
             |> constExprDeps locals expr
             |> constExprListDeps locals [ for (_, expr) in inits -> expr ]
-        | SizeofExpr typeExpr -> typeExprDeps typeExpr deps
+        | SizeofExpr typeExpr -> typeExprDeps locals typeExpr deps
         | CastExpr(typeExpr, expr) ->
             deps
-            |> typeExprDeps typeExpr
+            |> typeExprDeps locals typeExpr
             |> constExprDeps locals expr
         | UnExpr(OpPostIncr, _) | UnExpr(OpPostDecr, _)
         | UnExpr(OpPreIncr, _) | UnExpr(OpPreDecr, _) ->
@@ -138,33 +142,30 @@ let mkDependencyGraph (defs : TopLevelDef list) =
     and constExprListDeps locals exprs deps =
         List.fold (fun deps expr -> constExprDeps locals expr deps) deps exprs
 
-    and typeExprDeps typeExpr deps =
+    and typeExprDeps locals typeExpr deps =
         match typeExpr with
         | VoidType | PrimitiveType _
         | PointerType _ | GCRefType _ | ByRefType _ -> deps
         | ArrayType(typeExpr, sizeOpt) ->
             deps
-            |> typeExprDeps typeExpr
-            |> constExprListDeps Set.empty (Option.toList sizeOpt) // TODO: check against references to locals
+            |> typeExprDeps locals typeExpr
+            |> constExprListDeps locals (Option.toList sizeOpt)
         | FunctionType(retType, paramTypes) ->
             deps
-            |> typeExprDeps retType
-            |> typeExprListDeps paramTypes
+            |> typeExprDeps locals retType
+            |> typeExprListDeps locals paramTypes
         | NamedType name ->
             let def = Map.find name defMap // TODO: report key-not-found error
             match def with
             | TopEnum _ | TopStruct _ -> Set.add def deps
             | TopFun _ | TopConst _ | TopVar _ -> failwith "Id does not refer to an enum or struct type."
-            | TopTypeAlias aliasDef -> typeExprDeps aliasDef.typeExpr deps // TODO: guard against infinite loops
+            | TopTypeAlias aliasDef -> typeExprDeps locals aliasDef.typeExpr deps // TODO: guard against infinite loops
 
-    and typeExprListDeps typeExprs deps =
-        List.fold (fun deps typeExpr -> typeExprDeps typeExpr deps) deps typeExprs
+    and typeExprOptDeps locals typeExprOpt deps =
+        Option.fold (fun deps typeExpr -> typeExprDeps locals typeExpr deps) deps typeExprOpt
 
-    let findStructByName name =
-        let def = defMap |> Map.find name
-        match def with
-        | TopStruct _ -> def
-        | _ -> failwith "Struct expected." // TODO: report error
+    and typeExprListDeps locals typeExprs deps =
+        List.fold (fun deps typeExpr -> typeExprDeps locals typeExpr deps) deps typeExprs
 
     let rec statementDeps locals stmt deps =
         match stmt with
@@ -174,7 +175,7 @@ let mkDependencyGraph (defs : TopLevelDef list) =
             |> constExprDeps locals expr
             |> statementDeps locals stmt
         | DefaultStmt stmt -> statementDeps locals stmt deps
-        | CompoundStmt items -> raise(System.NotImplementedException()) // TODO
+        | CompoundStmt items -> blockItemListDeps locals items deps
         | ExprStmt expr -> exprDeps locals expr deps
         | NullStmt -> deps
         | IfStmt(expr, thenStmt, elseStmtOpt) ->
@@ -195,20 +196,91 @@ let mkDependencyGraph (defs : TopLevelDef list) =
             |> statementDeps locals stmt
             |> exprDeps locals expr
         | ForStmt(nameOpt, typeOpt, initOpt, condOpt, incrOpt, stmt) ->
-            raise(System.NotImplementedException()) // TODO
+            let locals =
+                match nameOpt with
+                | None -> locals
+                | Some name -> locals |> Set.add name
+            deps
+            |> typeExprOptDeps locals typeOpt
+            |> exprOptDeps locals initOpt
+            |> exprOptDeps locals condOpt
+            |> exprOptDeps locals incrOpt
+            |> statementDeps locals stmt
         | GotoStmt _ | ContinueStmt | BreakStmt -> deps
-        | ReturnStmt exprOpt ->
-            raise(System.NotImplementedException()) // TODO
+        | ReturnStmt exprOpt -> exprOptDeps locals exprOpt deps
         | TryBlockStmt(stmt, excHandlers) ->
-            raise(System.NotImplementedException()) // TODO
-        | ThrowStmt exprOpt ->
-            raise(System.NotImplementedException()) // TODO
+            deps
+            |> statementDeps locals stmt
+            |> excHandlerListDeps locals excHandlers
+        | ThrowStmt exprOpt -> exprOptDeps locals exprOpt deps
 
     and statementListDeps locals stmts deps =
         List.fold (fun deps stmt -> statementDeps locals stmt deps) deps stmts
 
     and exprDeps locals expr deps =
-        raise(System.NotImplementedException()) // TODO
+        match expr with
+        | NullExpr | BoolExpr _ | NumberExpr _ | StringExpr _ -> deps
+        | ArrayExpr exprs -> exprListDeps locals exprs deps
+        | IdExpr name ->
+            if Set.contains name locals then
+                deps
+            else
+                globalIdExprDeps name deps
+        | IndexExpr(e1, e2) -> exprListDeps locals [ e1; e2 ] deps
+        | CallExpr(f, args) ->
+            exprListDeps locals (f :: args) deps
+        | MemberRefExpr(expr, _) -> exprDeps locals expr deps
+        | StructExpr(expr, inits) ->
+            deps
+            |> exprDeps locals expr
+            |> exprListDeps locals [ for _, expr in inits -> expr ]
+        | SizeofExpr typeExpr -> typeExprDeps locals typeExpr deps
+        | CastExpr(typeExpr, expr) ->
+            deps
+            |> typeExprDeps locals typeExpr
+            |> exprDeps locals expr
+        | UnExpr(_, expr) -> exprDeps locals expr deps
+        | BinExpr(_, e1, e2) -> exprListDeps locals [ e1; e2 ] deps
+        | CondExpr(e1, e2, e3) -> exprListDeps locals [ e1; e2; e3] deps
+        | AssignExpr(_, e1, e2) -> exprListDeps locals [ e1; e2 ] deps
+
+    and exprOptDeps locals exprOpt deps =
+        Option.fold (fun deps expr -> exprDeps locals expr deps) deps exprOpt
+
+    and exprListDeps locals exprs deps =
+        List.fold (fun deps expr -> exprDeps locals expr deps) deps exprs
+
+    and blockItemListDeps locals blockItems deps =
+        let blockItemDeps (locals, deps) blockItem =
+            match blockItem with
+            | StmtBlockItem stmt ->
+                let deps = statementDeps locals stmt deps
+                locals, deps
+            | DeclBlockItem varDef ->
+                let locals = Set.add varDef.name locals
+                let deps =
+                    deps
+                    |> typeExprOptDeps locals varDef.varType
+                    |> exprOptDeps locals varDef.init
+                locals, deps
+        List.fold blockItemDeps (locals, deps) blockItems |> snd
+
+    and excHandlerListDeps locals excHandlers deps =
+        let excHandlerDeps deps excHandler =
+            match excHandler with
+            | CatchHandler(expr, stmt) ->
+                deps
+                |> exprDeps locals expr
+                |> statementDeps locals stmt
+            | FinallyHandler stmt ->
+                statementDeps locals stmt deps
+        List.fold excHandlerDeps deps excHandlers
+
+    let findStructByName name =
+        let def = defMap |> Map.find name
+        match def with
+        | TopStruct _ -> def
+        | _ -> failwith "Struct expected." // TODO: report error
 
     let funDeps (funDef : FunDef) deps =
         match funDef.body with
@@ -224,24 +296,24 @@ let mkDependencyGraph (defs : TopLevelDef list) =
                 match def with
                 | TopEnum enumDef ->
                     Set.empty
-                    |> typeExprDeps enumDef.underlyingType
+                    |> typeExprDeps locals enumDef.underlyingType
                     |> constExprListDeps locals [ for _, _, expr in enumDef.values do yield! Option.toArray expr ]
                 | TopStruct structDef ->
                     Set.empty
                     |> Set.union (Option.toArray structDef.baseName |> Array.map findStructByName |> Set.ofArray)
-                    |> typeExprListDeps [ for _, _, typeExpr in structDef.fields -> typeExpr ]
+                    |> typeExprListDeps locals [ for _, _, typeExpr in structDef.fields -> typeExpr ]
                 | TopFun funDef ->
                     Set.empty
-                    |> typeExprDeps funDef.retType
-                    |> typeExprListDeps [ for _, _, typeExpr in funDef.pars -> typeExpr ]
+                    |> typeExprDeps locals funDef.retType
+                    |> typeExprListDeps locals [ for _, _, typeExpr in funDef.pars -> typeExpr ]
                     |> funDeps funDef
                 | TopConst constDef ->
                     Set.empty
-                    |> typeExprListDeps (Option.toList constDef.constType)
+                    |> typeExprListDeps locals (Option.toList constDef.constType)
                     |> constExprDeps locals constDef.init
                 | TopVar varDef ->
                     Set.empty
-                    |> typeExprListDeps (Option.toList varDef.varType)
+                    |> typeExprListDeps locals (Option.toList varDef.varType)
                     |> constExprListDeps locals (Option.toList varDef.init)
                 | TopTypeAlias aliasDef -> Set.empty
                     
