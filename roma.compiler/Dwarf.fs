@@ -240,6 +240,12 @@ and DwNode(tree : DwTree, tag : DwTag, attrs : (DwAt * DwValue) list) =
             raise(System.InvalidOperationException())
         attrs.Add(at, value)
 
+    member this.AddAttrs(kvs : #seq<_>) =
+        if frozen then
+            raise(System.InvalidOperationException())
+        for k, v in kvs do
+            attrs.Add(k, v)
+
     member this.AddChild(child : DwNode) =
         if frozen then
             raise(System.InvalidOperationException())

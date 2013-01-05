@@ -9,6 +9,8 @@ Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "roma.cli.dump", "roma.cli.d
 EndProject
 Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "roma.plang", "roma.plang\roma.plang.fsproj", "{3BB66EE6-C6C3-41F5-AE89-FB20E9327257}"
 EndProject
+Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "roma.cli.compiler", "roma.cli.compiler\roma.cli.compiler.fsproj", "{31665320-DE50-4CAF-A419-278027882FB1}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -31,6 +33,10 @@ Global
 		{3BB66EE6-C6C3-41F5-AE89-FB20E9327257}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{3BB66EE6-C6C3-41F5-AE89-FB20E9327257}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{3BB66EE6-C6C3-41F5-AE89-FB20E9327257}.Release|Any CPU.Build.0 = Release|Any CPU
+		{31665320-DE50-4CAF-A419-278027882FB1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{31665320-DE50-4CAF-A419-278027882FB1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{31665320-DE50-4CAF-A419-278027882FB1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{31665320-DE50-4CAF-A419-278027882FB1}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
