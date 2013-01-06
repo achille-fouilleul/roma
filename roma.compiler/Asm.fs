@@ -2,14 +2,9 @@
 
 open System
 
-type AsmLabel =
-    {
-        name : string
-        comment : string
-    }
-
 type AsmLine =
-    | Label of AsmLabel 
+    | Label of string
+    | Comment of string
     | U8 of uint8
     | S8 of int8
     | U16 of uint16
@@ -20,15 +15,15 @@ type AsmLine =
     | S64 of int64
     | Uleb128 of UInt128
     | Sleb128 of Int128
-    | Ref32 of AsmLabel
-    | Ref64 of AsmLabel
+    | Ref32 of string
+    | Ref64 of string
     | String of string
     | Expr32 of string
     | Expr64 of string
 
     member this.ByteSize =
         match this with
-        | Label _ -> 0
+        | Label _ | Comment _ -> 0
         | U8 _ | S8 _ -> 1
         | U16 _ | S16 _ -> 2
         | U32 _ | S32 _ | Ref32 _ | Expr32 _ -> 4
@@ -63,11 +58,8 @@ let toStrings lines =
     seq {
         for line in lines ->
             match line with
-            | Label label ->
-                if String.IsNullOrEmpty(label.comment) then
-                    sprintf "%s:" label.name
-                else
-                    sprintf "%s: // %s" label.name label.comment
+            | Label label -> sprintf "%s:" label
+            | Comment comment -> sprintf "// %s" comment
             | U8 x -> sprintf "\t.byte 0x%x" x
             | S8 x -> sprintf "\t.byte %d" x
             | U16 x -> sprintf "\t.value 0x%x" x
@@ -92,11 +84,6 @@ let toStrings lines =
 
 let mutable private labelIndex = 0
 
-let createLabel comment =
+let createLabel() =
     let index = System.Threading.Interlocked.Increment(&labelIndex)
-    let label : AsmLabel =
-        {
-            name = sprintf ".L%d" index
-            comment = comment
-        }
-    label
+    sprintf ".L%d" index

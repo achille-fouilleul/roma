@@ -288,10 +288,10 @@ let serialize addrSize root =
     let labelOfString s =
         match stringLabelMap.TryGetValue(s) with
         | false, _ ->
-            let label = Asm.createLabel s
+            let label = Asm.createLabel()
             stringLabelMap.Add(s, label)
-            label.name
-        | true, label -> label.name
+            label
+        | true, label -> label
 
     let formOfValue (value : DwValue) =
         match value with
@@ -310,7 +310,7 @@ let serialize addrSize root =
     let rec pass1 (node : DwNode) =
         if not(nodeLabelMap.ContainsKey(node)) then
             node.Freeze()
-            nodeLabelMap.Add(node, Asm.createLabel "")
+            nodeLabelMap.Add(node, Asm.createLabel())
             for at, value in node.Attrs do
                 match value with
                 | DwValue.Ref node -> pass1 node
@@ -375,14 +375,14 @@ let serialize addrSize root =
             seq {
                 // compilation unit header
                 yield Asm.Expr32 ".Ldebug_info_end - .Ldebug_info_start"
-                yield Asm.Label { name = ".Ldebug_info_start"; comment = "" }
+                yield Asm.Label ".Ldebug_info_start"
                 yield Asm.U16 dwarfVersion
                 yield Asm.Expr32 ".Ldebug_abbrev"
                 yield Asm.U8 address_size
 
                 yield! pass2 root
 
-                yield Asm.Label { name = ".Ldebug_info_end"; comment = "" }
+                yield Asm.Label ".Ldebug_info_end"
             }
 
         yield! Asm.toStrings infoLines
@@ -392,7 +392,7 @@ let serialize addrSize root =
 
         let abbrevLines =
             seq {
-                yield Asm.Label { name = ".Ldebug_abbrev"; comment = "" }
+                yield Asm.Label ".Ldebug_abbrev"
                 let abbrevs =
                     abbrevMap
                     |> Seq.sortBy (fun kvp -> kvp.Value)

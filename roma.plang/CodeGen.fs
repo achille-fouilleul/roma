@@ -154,7 +154,8 @@ let run (defs : TopLevelDef list) =
                 entry.Inherit(globalNs.FindType(name))
             for (name, _, typeExpr) in structDef.fields do
                 // TODO: check against multiple fields with the same name
-                entry.AddMember(name, evalTypeExpr typeExpr)
+                let mem = entry.AddMember(name)
+                mem.SetType(evalTypeExpr typeExpr)
 
         | TopTypeAlias _ -> ()
 

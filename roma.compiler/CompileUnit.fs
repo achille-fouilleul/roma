@@ -135,21 +135,20 @@ and MemberContainer internal (tree, tag, name) as this =
                 ])
         this.Node.AddChild(child)
 
-    member this.AddMember(name, memberType) =
-        let mem = Member(tree, name, memberType)
+    member this.AddMember(name) =
+        let mem = Member(tree, name)
         members.Add(mem)
         this.Node.AddChild(mem.Node)
+        mem
 
-and Member internal (tree : DwTree, name : string, memberType : TypeEntry option) =
-    let node =
-        tree.Create(
-            DwTag.Member,
-            [
-                yield DwAt.Name, DwValue.String name
-                yield! TypeEntry.Attr memberType
-                // TODO: DwAt.DataMemberLocation
-            ])
+and Member internal (tree : DwTree, name : string) =
+    let node = tree.Create(DwTag.Member, [ DwAt.Name, DwValue.String name ])
+    // TODO: DwAt.DataMemberLocation
+
     member this.Node = node
+
+    member this.SetType(memberType : TypeEntry option) =
+        node.AddAttrs(TypeEntry.Attr memberType)
 
 and TypedefEntry internal (tree, name) as this =
     inherit TypeEntry(tree, DwTag.Typedef)
@@ -357,9 +356,12 @@ type CompileUnit(addrSize : AddrSize) =
         memoize subroutineTypeMap createSubroutineType (retType, paramTypes)
 
     member this.WriteTo(path : string) =
-        let lines = Dwarf.serialize addrSize node
+        let text =
+            let buffer = System.Text.StringBuilder()
+            for line in Dwarf.serialize addrSize node do
+                buffer.AppendLine(line) |> ignore
+            buffer.ToString()
         if path = "-" then
-            for line in lines do
-                System.Console.Out.WriteLine(line)
+            System.Console.Out.Write(text)
         else
-            System.IO.File.WriteAllLines(path, lines)
+            System.IO.File.WriteAllText(path, text)
