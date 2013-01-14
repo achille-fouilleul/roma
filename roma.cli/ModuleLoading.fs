@@ -143,6 +143,9 @@ type private ModuleLoader(pe : PEImageReader) =
     let methodSpecTable = md.MethodSpecTable
     let genericParamConstraintTable = md.GenericParamConstraintTable
 
+    do if exportedTypeTable.Length <> 0 then
+        raise(NotImplementedException()) // TODO
+
     let eventMap =
         seq {
             for eventMapId in 1u .. uint32 eventMapTable.Length do

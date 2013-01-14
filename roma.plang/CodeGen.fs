@@ -78,7 +78,9 @@ let run (defs : TopLevelDef list) =
     and evalConstModifiedType(typeExpr, ro) =
         let origType = evalTypeExpr typeExpr
         if ro then
-            Some(cu.GetConstType(origType) :> TypeEntry)
+            match origType with
+            | None -> failwith "Void type cannot be const-modified." // TODO: report error
+            | Some t -> Some(cu.GetConstType(t) :> TypeEntry)
         else
             origType
 

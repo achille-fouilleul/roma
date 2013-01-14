@@ -160,6 +160,9 @@ type DwAt =
     | EnumClass = 0x6d
     | LinkageName = 0x6e
 
+    // CLR extensions
+    | ClrManaged = 0x3c00
+
 type DwAte =
     | Address = 0x01
     | Boolean = 0x02
@@ -287,11 +290,11 @@ let serialize addrSize root =
 
     let labelOfString s =
         match stringLabelMap.TryGetValue(s) with
-        | false, _ ->
+        | true, label -> label
+        | _ ->
             let label = Asm.createLabel()
             stringLabelMap.Add(s, label)
             label
-        | true, label -> label
 
     let formOfValue (value : DwValue) =
         match value with
@@ -335,7 +338,7 @@ let serialize addrSize root =
         let index =
             match abbrevMap.TryGetValue(abbrev) with
             | true, index -> index
-            | false, _ ->
+            | _ ->
                 let index = !abbrevIndex
                 abbrevMap.Add(abbrev, index)
                 abbrevIndex := index + 1u
