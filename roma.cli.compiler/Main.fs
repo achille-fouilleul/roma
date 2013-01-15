@@ -17,6 +17,7 @@ and TypeNode =
     {
         scope : TypeScope // nested types
         typeDef : TypeDef
+        genArgs : TypeEntry list
         typeEntry : TypeEntry
         fields : MutableList<FieldDef * Member>
         methods : MutableList<MethodDef * Subprogram>
@@ -81,6 +82,7 @@ let compile (m : Module) (compileUnit : CompileUnit) =
                     {
                         scope = scope'
                         typeDef = typeDef
+                        genArgs = []
                         typeEntry = entry
                         fields = MutableList<_>()
                         methods = MutableList<_>()
@@ -95,6 +97,8 @@ let compile (m : Module) (compileUnit : CompileUnit) =
                     else
                         let sub = entry.AddSubprogram(mth.name)
                         node.methods.Add((mth, sub))
+                        if (mth.flags &&& MethodAttributes.Virtual) = MethodAttributes.Virtual then
+                            sub.SetVirtual((mth.flags &&& MethodAttributes.Abstract) = MethodAttributes.Abstract)
                 for nestedType in typeDef.nestedTypes do
                     addType (entry :> ITypeContainer) scope' nestedType
 
@@ -107,6 +111,7 @@ let compile (m : Module) (compileUnit : CompileUnit) =
                                 closedGenericTypeMap = null
                             }
                         typeDef = typeDef
+                        genArgs = []
                         typeEntry = entry
                         fields = null
                         methods = null
@@ -170,7 +175,8 @@ let compile (m : Module) (compileUnit : CompileUnit) =
         let ns = getNamespace typeDef.typeNamespace compileUnit
         addType ns rootTypeScope typeDef
 
-    let prim kind = Some(compileUnit.GetPrimitiveType(kind) :> TypeEntry)
+    let prim kind =
+        Some(compileUnit.GetPrimitiveType(kind) :> TypeEntry)
 
     let getSystemType ns name =
         // TODO: handle cases where current module is not the system library
@@ -195,13 +201,13 @@ let compile (m : Module) (compileUnit : CompileUnit) =
         ]
         |> List.map (fun (name, kind) -> (getSystemType "System" name, compileUnit.GetPrimitiveType(kind)))
 
-    let rec resolveTypeRef (typeRef : TypeRef) compileUnit =
+    let rec resolveTypeRef (typeRef : TypeRef) =
         match typeRef.scope with
         | None ->
             let ns = getNamespace typeRef.typeNamespace compileUnit
             ns.FindType(typeRef.typeName)
         | Some(TypeRefScope(TypeSpec.Choice1Of2 enclosingType)) ->
-            let typeEntry = resolveTypeRef enclosingType compileUnit
+            let typeEntry = resolveTypeRef enclosingType
             (box typeEntry :?> ITypeContainer).FindType(typeRef.typeName)
         | Some _ -> raise(System.NotImplementedException()) // TODO
 
@@ -223,120 +229,127 @@ let compile (m : Module) (compileUnit : CompileUnit) =
             | :? ManagedArrayTypeEntry as arrayType ->
                 compileUnit.GetManagedArrayType(canonicalize(Some arrayType.ElementType)) :> TypeEntry
             | _ ->
-                // TODO: arrays
                 // TODO: remove modopts, modreqs, etc.
                 raise(System.NotImplementedException()) // TODO
 
-    let rec resolveTypeSig =
-        function
-        | TypeSig.Boolean -> prim PrimitiveTypeKind.Bool
-        | TypeSig.Char -> prim PrimitiveTypeKind.Char16
-        | TypeSig.I1 -> prim PrimitiveTypeKind.SInt8
-        | TypeSig.U1 -> prim PrimitiveTypeKind.UInt8
-        | TypeSig.I2 -> prim PrimitiveTypeKind.SInt16
-        | TypeSig.U2 -> prim PrimitiveTypeKind.UInt16
-        | TypeSig.I4 -> prim PrimitiveTypeKind.SInt32
-        | TypeSig.U4 -> prim PrimitiveTypeKind.UInt32
-        | TypeSig.I8 -> prim PrimitiveTypeKind.SInt64
-        | TypeSig.U8 -> prim PrimitiveTypeKind.UInt64
-        | TypeSig.R4 -> prim PrimitiveTypeKind.Float32
-        | TypeSig.R8 -> prim PrimitiveTypeKind.Float64
-        | TypeSig.I -> prim PrimitiveTypeKind.SIntPtr
-        | TypeSig.U -> prim PrimitiveTypeKind.UIntPtr
-        | TypeSig.Array(elemType, shape) ->
-            match resolveTypeSig elemType with
-            | None -> failwith "Element type of managed array cannot be void."
-            | Some t -> Some(compileUnit.GetManagedArrayType(t, shape) :> TypeEntry)
-        | TypeSig.ByRef typeSig -> Some(compileUnit.GetReferenceType(resolveTypeSig typeSig) :> TypeEntry)
-        | TypeSig.Fnptr methodSig ->
-            let retType = resolveTypeSig methodSig.retType
-            let paramTypes = Array.map resolveTypeSig methodSig.paramTypes
-            let subType = compileUnit.GetSubroutineType(retType, paramTypes) :> TypeEntry
-            Some(compileUnit.GetPointerType(Some subType) :> TypeEntry)
-        | TypeSig.GenericInst(genType, args) ->
-            match genType with
+    let newClosedGenericTypes = MutableList<_>()
+
+    let resolveTypeSig typeSig (vars, mvars) =
+        let rec visitTypeSig =
+            function
+            | TypeSig.Boolean -> prim PrimitiveTypeKind.Bool
+            | TypeSig.Char -> prim PrimitiveTypeKind.Char16
+            | TypeSig.I1 -> prim PrimitiveTypeKind.SInt8
+            | TypeSig.U1 -> prim PrimitiveTypeKind.UInt8
+            | TypeSig.I2 -> prim PrimitiveTypeKind.SInt16
+            | TypeSig.U2 -> prim PrimitiveTypeKind.UInt16
+            | TypeSig.I4 -> prim PrimitiveTypeKind.SInt32
+            | TypeSig.U4 -> prim PrimitiveTypeKind.UInt32
+            | TypeSig.I8 -> prim PrimitiveTypeKind.SInt64
+            | TypeSig.U8 -> prim PrimitiveTypeKind.UInt64
+            | TypeSig.R4 -> prim PrimitiveTypeKind.Float32
+            | TypeSig.R8 -> prim PrimitiveTypeKind.Float64
+            | TypeSig.I -> prim PrimitiveTypeKind.SIntPtr
+            | TypeSig.U -> prim PrimitiveTypeKind.UIntPtr
+            | TypeSig.Array(elemType, shape) ->
+                match visitTypeSig elemType with
+                | None -> failwith "Element type of managed array cannot be void."
+                | Some t -> Some(compileUnit.GetManagedArrayType(t, shape) :> TypeEntry)
+            | TypeSig.ByRef typeSig -> Some(compileUnit.GetReferenceType(visitTypeSig typeSig) :> TypeEntry)
+            | TypeSig.Fnptr methodSig ->
+                let retType = visitTypeSig methodSig.retType
+                let paramTypes = Array.map visitTypeSig methodSig.paramTypes
+                let subType = compileUnit.GetSubroutineType(retType, paramTypes) :> TypeEntry
+                Some(compileUnit.GetPointerType(Some subType) :> TypeEntry)
+            | TypeSig.GenericInst(genType, args) ->
+                match genType with
+                | TypeSig.Class typeRef ->
+                    // TODO: check that typeRef references a reference type
+                    let tmp = genericTypeInstance typeRef args
+                    Some(compileUnit.GetManagedPointerType(tmp) :> TypeEntry)
+                | TypeSig.ValueType typeRef ->
+                    // TODO: check that typeRef references a value type
+                    Some(genericTypeInstance typeRef args)
+                | _ -> failwith "Invalid generic inst."
+            | TypeSig.MVar n -> Some(List.nth mvars n)
+            | TypeSig.Object -> Some(getSystemType "System" "Object")
+            | TypeSig.Ptr typeSig ->
+                Some(compileUnit.GetPointerType(visitTypeSig typeSig) :> TypeEntry)
+            | TypeSig.String -> Some(getSystemType "System" "String")
+            | TypeSig.SZArray elemType ->
+                match visitTypeSig elemType with
+                | None -> failwith "Element type of managed array cannot be void."
+                | Some t -> Some(compileUnit.GetManagedArrayType(t) :> TypeEntry)
+            | TypeSig.TypedByRef -> Some(getSystemType "System" "TypedReference")
+            | TypeSig.Var n -> Some(List.nth vars n)
+            | TypeSig.Void -> None
+            | TypeSig.ModReq(modType, typeSig) ->
+                // FIXME: name-based type check
+                match (modType.typeNamespace, modType.typeName) with
+                | ("System.Runtime.CompilerServices", "IsVolatile") ->
+                    match visitTypeSig typeSig with
+                    | None -> failwith "Volatile modifier cannot be applied to void type."
+                    | Some t -> Some(compileUnit.GetVolatileType(t) :> TypeEntry)
+                | _ -> raise(System.NotImplementedException()) // TODO
+            | TypeSig.ModOpt(modType, typeSig) -> raise(System.NotImplementedException()) // TODO
+            | TypeSig.Pinned typeSig -> raise(System.NotImplementedException()) // TODO
             | TypeSig.Class typeRef ->
                 // TODO: check that typeRef references a reference type
-                let tmp = genericTypeInstance typeRef args compileUnit
+                let tmp = resolveTypeRef typeRef
                 Some(compileUnit.GetManagedPointerType(tmp) :> TypeEntry)
             | TypeSig.ValueType typeRef ->
                 // TODO: check that typeRef references a value type
-                Some(genericTypeInstance typeRef args compileUnit)
-            | _ -> failwith "Invalid generic inst."
-        | TypeSig.MVar n -> raise(System.NotImplementedException()) // TODO
-        | TypeSig.Object -> Some(getSystemType "System" "Object")
-        | TypeSig.Ptr typeSig ->
-            Some(compileUnit.GetPointerType(resolveTypeSig typeSig) :> TypeEntry)
-        | TypeSig.String -> Some(getSystemType "System" "String")
-        | TypeSig.SZArray elemType ->
-            match resolveTypeSig elemType with
-            | None -> failwith "Element type of managed array cannot be void."
-            | Some t -> Some(compileUnit.GetManagedArrayType(t) :> TypeEntry)
-        | TypeSig.TypedByRef -> Some(getSystemType "System" "TypedReference")
-        | TypeSig.Var n -> raise(System.NotImplementedException()) // TODO
-        | TypeSig.Void -> None
-        | TypeSig.ModReq(modType, typeSig) ->
-            // FIXME: name-based type check
-            match (modType.typeNamespace, modType.typeName) with
-            | ("System.Runtime.CompilerServices", "IsVolatile") ->
-                match resolveTypeSig typeSig with
-                | None -> failwith "Volatile modifier cannot be applied to void type."
-                | Some t -> Some(compileUnit.GetVolatileType(t) :> TypeEntry)
-            | _ -> raise(System.NotImplementedException()) // TODO
-        | TypeSig.ModOpt(modType, typeSig) -> raise(System.NotImplementedException()) // TODO
-        | TypeSig.Pinned typeSig -> raise(System.NotImplementedException()) // TODO
-        | TypeSig.Class typeRef ->
-            // TODO: check that typeRef references a reference type
-            let tmp = resolveTypeRef typeRef compileUnit
-            Some(compileUnit.GetManagedPointerType(tmp) :> TypeEntry)
-        | TypeSig.ValueType typeRef ->
-            // TODO: check that typeRef references a value type
-            Some(resolveTypeRef typeRef compileUnit)
+                Some(resolveTypeRef typeRef)
 
-    and genericTypeInstance typeRef args compileUnit =
-        let genArgs = List.map (resolveTypeSig >> canonicalize) args
-        let inst (scope : TypeScope) (typeContainer : ITypeContainer) fqn =
-            match scope.typeMap.[fqn] with
-            | AnyTypeNode.Choice1Of2 node -> node
-            | AnyTypeNode.Choice2Of2 node ->
-                let typeDef = node.typeDef
-                let args' =
-                    genArgs
-                    |> Seq.take typeDef.genericParams.Length
-                    |> Seq.toList
-                let key = (typeDef.typeNamespace, typeDef.typeName, args')
-                match scope.closedGenericTypeMap.TryGetValue(key) with
-                | true, node -> node
-                | _ ->
-                    let entry =
-                        let argNames = Seq.map typeEntryDescription args'
-                        let name = typeRef.typeName + "<" + (String.concat ", " argNames) + ">"
-                        createTypeEntry typeContainer typeDef name id (fun _ -> failwith "Enums cannot be generic.")
-                    // TODO: add TemplateTypeParameter:s
-                    let node : TypeNode =
-                        {
-                            scope = node.scope
-                            typeDef = typeDef
-                            typeEntry = entry
-                            fields = MutableList<_>()
-                            methods = MutableList<_>()
-                            genMethods = MutableList<_>()
-                        }
-                    scope.closedGenericTypeMap.Add(key, node)
-                    node
-        let rec visitTypeRef (typeRef : TypeRef) =
-            let fqn = (typeRef.typeNamespace, typeRef.typeName)
-            match typeRef.scope with
-            | None ->
-                let typeContainer = getNamespace typeRef.typeNamespace compileUnit
-                inst rootTypeScope typeContainer fqn
-            | Some(TypeRefScope(TypeSpec.Choice1Of2 enclosingTypeRef)) ->
-                let enclosingNode = visitTypeRef enclosingTypeRef
-                let typeContainer = box enclosingNode.typeEntry :?> ITypeContainer
-                inst enclosingNode.scope typeContainer fqn
-            | _ -> raise(System.NotImplementedException()) // TODO
-        let node = visitTypeRef typeRef
-        node.typeEntry
+        and genericTypeInstance typeRef genArgSigs =
+            let genArgs = List.map (visitTypeSig >> canonicalize) genArgSigs
+            let inst (scope : TypeScope) (typeContainer : ITypeContainer) fqn =
+                match scope.typeMap.[fqn] with
+                | AnyTypeNode.Choice1Of2 node -> node
+                | AnyTypeNode.Choice2Of2 node ->
+                    let typeDef = node.typeDef
+                    let args =
+                        genArgs
+                        |> Seq.take typeDef.genericParams.Length
+                        |> Seq.toList
+                    let key = (typeDef.typeNamespace, typeDef.typeName, args)
+                    match scope.closedGenericTypeMap.TryGetValue(key) with
+                    | true, node -> node
+                    | _ ->
+                        let entry =
+                            let argNames = Seq.map typeEntryDescription args
+                            let name = typeRef.typeName + "<" + (String.concat ", " argNames) + ">"
+                            createTypeEntry typeContainer typeDef name id (fun _ -> failwith "Enums cannot be generic.")
+                        for p, a in Seq.zip typeDef.genericParams args do
+                            entry.AddTypeParameter(p.name, a)
+                        let node : TypeNode =
+                            {
+                                scope = node.scope
+                                typeDef = typeDef
+                                genArgs = args
+                                typeEntry = entry
+                                fields = MutableList<_>()
+                                methods = MutableList<_>()
+                                genMethods = MutableList<_>()
+                            }
+                        scope.closedGenericTypeMap.Add(key, node)
+                        newClosedGenericTypes.Add((key, node))
+                        node
+            let rec visitTypeRef (typeRef : TypeRef) =
+                let fqn = (typeRef.typeNamespace, typeRef.typeName)
+                match typeRef.scope with
+                | None ->
+                    let typeContainer = getNamespace typeRef.typeNamespace compileUnit
+                    inst rootTypeScope typeContainer fqn
+                | Some(TypeRefScope(TypeSpec.Choice1Of2 enclosingTypeRef)) ->
+                    let enclosingNode = visitTypeRef enclosingTypeRef
+                    let typeContainer = box enclosingNode.typeEntry :?> ITypeContainer
+                    inst enclosingNode.scope typeContainer fqn
+                | _ -> raise(System.NotImplementedException()) // TODO
+            let node = visitTypeRef typeRef
+            node.typeEntry
+
+        visitTypeSig typeSig
 
     // set types of members
     let rec visitScope (scope : TypeScope) =
@@ -344,21 +357,20 @@ let compile (m : Module) (compileUnit : CompileUnit) =
             for kvp in scope.typeMap do
                 match kvp.Value with
                 | AnyTypeNode.Choice1Of2 node -> visitNode node
-                | AnyTypeNode.Choice2Of2 _ -> ()
-        if scope.closedGenericTypeMap <> null then
-            for kvp in scope.closedGenericTypeMap do
-                visitNode kvp.Value
+                | AnyTypeNode.Choice2Of2 _ -> () // skip open generic types
 
     and visitNode node =
+        let genArgs = (node.genArgs, [])
+
         // resolve base type
         match box node.typeEntry with
         | :? MemberContainer as t ->
             for typeSpec in Option.toArray node.typeDef.baseType do
                 let entry =
                     match typeSpec with
-                    | TypeSpec.Choice1Of2 typeRef -> resolveTypeRef typeRef compileUnit
+                    | TypeSpec.Choice1Of2 typeRef -> resolveTypeRef typeRef
                     | TypeSpec.Choice2Of2 typeSig ->
-                        match resolveTypeSig typeSig with
+                        match resolveTypeSig typeSig genArgs with
                         | None ->
                             // cannot derive from void
                             failwith "Invalid base type."
@@ -372,16 +384,40 @@ let compile (m : Module) (compileUnit : CompileUnit) =
         // fields
         if node.fields <> null then
             for fld, mem in node.fields do
-                mem.SetType(resolveTypeSig fld.typeSig)
+                mem.SetType(resolveTypeSig fld.typeSig genArgs)
 
         // methods
         if node.methods <> null then
             for mth, sub in node.methods do
-                sub.SetReturnType(resolveTypeSig mth.signature.retType)
+                sub.SetReturnType(resolveTypeSig mth.signature.retType genArgs)
+                if mth.signature.callConv.hasThis then
+                    let paramType =
+                        match box node.typeEntry with
+                        | :? StructTypeEntry ->
+                            compileUnit.GetReferenceType(Some node.typeEntry) :> TypeEntry
+                        | _ ->
+                            compileUnit.GetManagedPointerType(node.typeEntry) :> TypeEntry
+                    let param = sub.AddParameter(paramType, None)
+                    param.SetArtificial()
+                    sub.SetObjectPointer(param)
+                for paramDefOpt, typeSig in Seq.zip mth.parameters mth.signature.paramTypes do
+                    match resolveTypeSig typeSig genArgs with
+                    | None -> failwith "Parameter type cannot be void."
+                    | Some paramType ->
+                        let nameOpt = paramDefOpt |> Option.map (fun paramDef -> paramDef.name)
+                        sub.AddParameter(paramType, nameOpt)
+                        |> ignore
 
         visitScope node.scope
 
     visitScope rootTypeScope
+
+    while newClosedGenericTypes.Count <> 0 do
+        let kvs = newClosedGenericTypes.ToArray()
+        eprintfn "%d" kvs.Length
+        newClosedGenericTypes.Clear()
+        for _, node in kvs do
+            visitNode node
 
     // TODO
 

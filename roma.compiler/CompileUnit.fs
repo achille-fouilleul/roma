@@ -130,6 +130,16 @@ and MemberContainer internal (tree, tag, name) as this =
 
     member this.Name = name
 
+    member this.AddTypeParameter(name : string, paramType : TypeEntry) =
+        this.Node.AddChild(
+            tree.Create(
+                DwTag.TemplateTypeParameter,
+                [
+                    DwAt.Name, DwValue.String name
+                    DwAt.Type, DwValue.Ref paramType.Node
+                ])
+        )
+
     member this.Inherit(baseType : TypeEntry) =
         let child =
             tree.Create(
@@ -169,6 +179,32 @@ and Subprogram internal (tree : DwTree, name : string) =
 
     member this.SetReturnType(memberType : TypeEntry option) =
         node.AddAttrs(TypeEntry.Attr memberType)
+
+    member this.AddParameter(paramType : TypeEntry, nameOpt : string option) =
+        let param = FormalParameter(tree, paramType, nameOpt)
+        node.AddChild(param.Node)
+        param
+
+    member this.SetObjectPointer(param : FormalParameter) =
+        node.AddAttr(DwAt.ObjectPointer, DwValue.Ref param.Node)
+
+    member this.SetVirtual(isPure : bool) =
+        node.AddAttr(DwAt.Virtuality, DwValue.Sdata(Int128(if isPure then 2 else 1)))
+
+and FormalParameter internal (tree : DwTree, paramType, nameOpt) =
+    let node =
+        tree.Create(
+            DwTag.FormalParameter,
+            [
+                yield DwAt.Type, DwValue.Ref paramType.Node
+                for name in Option.toArray nameOpt do
+                    yield DwAt.Name, DwValue.String name
+            ])
+
+    member this.Node = node
+
+    member this.SetArtificial() =
+        node.AddAttr(DwAt.Artificial, DwValue.Bool true)
 
 and TypedefEntry internal (tree, name) as this =
     inherit TypeEntry(tree, DwTag.Typedef)
@@ -462,6 +498,6 @@ type CompileUnit(addrSize : AddrSize) =
                 buffer.AppendLine(line) |> ignore
             buffer.ToString()
         if path = "-" then
-            System.Console.Out.Write(text)
+            System.Console.Write(text)
         else
             System.IO.File.WriteAllText(path, text)
