@@ -13,6 +13,7 @@ type TypeScope =
         closedGenericTypeMap : MutableMap<string * string * (TypeEntry list), TypeNode>
     }
 
+// non-generic types and closed generic types
 and TypeNode =
     {
         scope : TypeScope // nested types
@@ -24,13 +25,18 @@ and TypeNode =
         genMethods : MutableList<MethodDef>
     }
 
-and GenericTypeNode =
+and OpenGenericTypeNode =
     {
         typeDef : TypeDef
         scope : TypeScope
     }
 
-and AnyTypeNode = Choice<TypeNode, GenericTypeNode>
+and EnumTypeNode =
+    {
+        typeDef : TypeDef
+    }
+
+and AnyTypeNode = Choice<TypeNode, OpenGenericTypeNode, EnumTypeNode>
 
 let getNamespace fqn (ns : INamespace) =
     if System.String.IsNullOrEmpty(fqn) then
@@ -38,7 +44,7 @@ let getNamespace fqn (ns : INamespace) =
     else
         ns.GetNamespace(fqn)
 
-let newScope() : TypeScope =
+let mkScope() : TypeScope =
     {
         typeMap = MutableMap<_, _>()
         closedGenericTypeMap = MutableMap<_, _>()
@@ -48,36 +54,53 @@ let rec typeEntryDescription (entry : TypeEntry) =
     match box entry with
     | :? EnumTypeEntry as entry -> entry.Name
     | :? PrimitiveTypeEntry as entry -> entry.Name
-    | :? MemberContainer as entry -> entry.Name
+    | :? ComplexTypeBase as entry -> entry.Name
     | :? ManagedPointerTypeEntry as entry ->
         typeEntryDescription entry.ReferencedType
     | :? ManagedArrayTypeEntry as entry ->
         typeEntryDescription entry.ElementType + "[]"
     | _ -> raise(System.NotImplementedException()) // TODO: arrays, etc.
 
-let private createTypeEntry (scope : ITypeContainer) (typeDef : TypeDef) name (addMembers : MemberContainer -> 't) addValues =
+let private createTypeEntry (scope : ITypeContainer) (typeDef : TypeDef) name (initType : ComplexTypeBase -> 't) addValues =
     if (typeDef.flags &&& TypeAttributes.ClassSemanticsMask) = TypeAttributes.Interface then
-        scope.CreateInterfaceType(name) |> addMembers
+        scope.CreateInterfaceType(name) |> initType
     else
         // FIXME: check of base type is name-based
         if (typeDef.typeNamespace, typeDef.typeName) = ("System", "Enum") then
-            scope.CreateClassType(name) |> addMembers
+            scope.CreateClassType(name) |> initType
         else
             match typeDef.baseType with
-            | Some(TypeSpec.Choice1Of2 { typeNamespace = "System"; typeName = "Enum" }) ->
+            | Some(Choice1Of2 { typeNamespace = "System"; typeName = "Enum" }) ->
                 scope.CreateEnumType(name) |> addValues
-            | Some(TypeSpec.Choice1Of2 { typeNamespace = "System"; typeName = "ValueType" }) ->
-                scope.CreateStructType(name) |> addMembers
-            | _ -> scope.CreateClassType(name) |> addMembers
+            | Some(Choice1Of2 { typeNamespace = "System"; typeName = "ValueType" }) ->
+                scope.CreateStructType(name) |> initType
+            | _ -> scope.CreateClassType(name) |> initType
+
+let private addFields (fieldDefs : FieldDef list) addField (fields : MutableList<_>) =
+    for fld in fieldDefs do
+        fields.Add((fld, addField fld.name))
+
+let private addMethods (methodDefs : MethodDef list) addMethod (methods : MutableList<_>, genMethods : MutableList<_>) =
+    for mth in methodDefs do
+        if mth.genericParams.Length <> 0 then
+            genMethods.Add(mth)
+        else
+            let sub : Subprogram = addMethod mth.name
+            methods.Add((mth, sub))
+            if (mth.flags &&& MethodAttributes.Virtual) = MethodAttributes.Virtual then
+                sub.SetVirtual((mth.flags &&& MethodAttributes.Abstract) = MethodAttributes.Abstract)
 
 let compile (m : Module) (compileUnit : CompileUnit) =
 
-    let rootTypeScope = newScope()
+    let rootTypeScope = mkScope()
+    let rootVariables = MutableList<_>()
+    let rootMethods = MutableList<_>()
+    let rootGenMethods = MutableList<_>()
 
     for typeDef in m.typeDefs do
         let rec addType typeContainer (scope : TypeScope) (typeDef : TypeDef) =
-            let addMembers (entry : MemberContainer) =
-                let scope' = newScope()
+            let initType (entry : ComplexTypeBase) =
+                let scope' = mkScope()
                 let node : TypeNode =
                     {
                         scope = scope'
@@ -88,36 +111,15 @@ let compile (m : Module) (compileUnit : CompileUnit) =
                         methods = MutableList<_>()
                         genMethods = MutableList<_>()
                     }
-                scope.typeMap.Add((typeDef.typeNamespace, typeDef.typeName), AnyTypeNode.Choice1Of2 node)
-                for fld in typeDef.fields do
-                    node.fields.Add((fld, entry.AddMember(fld.name)))
-                for mth in typeDef.methods do
-                    if mth.genericParams.Length <> 0 then
-                        node.genMethods.Add(mth)
-                    else
-                        let sub = entry.AddSubprogram(mth.name)
-                        node.methods.Add((mth, sub))
-                        if (mth.flags &&& MethodAttributes.Virtual) = MethodAttributes.Virtual then
-                            sub.SetVirtual((mth.flags &&& MethodAttributes.Abstract) = MethodAttributes.Abstract)
+                scope.typeMap.Add((typeDef.typeNamespace, typeDef.typeName), Choice1Of3 node)
+                addFields typeDef.fields (fun name -> entry.AddMember(name)) node.fields
+                addMethods typeDef.methods (fun name -> entry.AddSubprogram(name)) (node.methods, node.genMethods)
                 for nestedType in typeDef.nestedTypes do
                     addType (entry :> ITypeContainer) scope' nestedType
 
             let addValues (entry : EnumTypeEntry) =
-                let node : TypeNode =
-                    {
-                        scope =
-                            {
-                                typeMap = null
-                                closedGenericTypeMap = null
-                            }
-                        typeDef = typeDef
-                        genArgs = []
-                        typeEntry = entry
-                        fields = null
-                        methods = null
-                        genMethods = null
-                    }
-                scope.typeMap.Add((typeDef.typeNamespace, typeDef.typeName), AnyTypeNode.Choice1Of2 node)
+                let node : EnumTypeNode = { typeDef = typeDef }
+                scope.typeMap.Add((typeDef.typeNamespace, typeDef.typeName), Choice3Of3 node)
                 for fld in typeDef.fields do
                     if (fld.flags &&& FieldAttributes.Static) = FieldAttributes.Static then
                         match fld.constant with
@@ -159,21 +161,24 @@ let compile (m : Module) (compileUnit : CompileUnit) =
 
             if typeDef.genericParams.Length <> 0 then
                 let rec addGenType scope typeDef =
-                    let scope' = newScope()
-                    let node : GenericTypeNode =
+                    let scope' = mkScope()
+                    let node : OpenGenericTypeNode =
                         {
                             scope = scope'
                             typeDef = typeDef
                         }
-                    scope.typeMap.Add((typeDef.typeNamespace, typeDef.typeName), AnyTypeNode.Choice2Of2 node)
+                    scope.typeMap.Add((typeDef.typeNamespace, typeDef.typeName), Choice2Of3 node)
                     for nestedType in typeDef.nestedTypes do
                         addGenType scope' nestedType
                 addGenType scope typeDef
             else
-                createTypeEntry typeContainer typeDef typeDef.typeName addMembers addValues
+                createTypeEntry typeContainer typeDef typeDef.typeName initType addValues
 
         let ns = getNamespace typeDef.typeNamespace compileUnit
         addType ns rootTypeScope typeDef
+
+    addFields m.fields (fun name -> compileUnit.AddVariable(name)) rootVariables
+    addMethods m.methods (fun name -> compileUnit.AddSubprogram(name)) (rootMethods, rootGenMethods)
 
     let prim kind =
         Some(compileUnit.GetPrimitiveType(kind) :> TypeEntry)
@@ -206,7 +211,7 @@ let compile (m : Module) (compileUnit : CompileUnit) =
         | None ->
             let ns = getNamespace typeRef.typeNamespace compileUnit
             ns.FindType(typeRef.typeName)
-        | Some(TypeRefScope(TypeSpec.Choice1Of2 enclosingType)) ->
+        | Some(TypeRefScope(Choice1Of2 enclosingType)) ->
             let typeEntry = resolveTypeRef enclosingType
             (box typeEntry :?> ITypeContainer).FindType(typeRef.typeName)
         | Some _ -> raise(System.NotImplementedException()) // TODO
@@ -305,8 +310,8 @@ let compile (m : Module) (compileUnit : CompileUnit) =
             let genArgs = List.map (visitTypeSig >> canonicalize) genArgSigs
             let inst (scope : TypeScope) (typeContainer : ITypeContainer) fqn =
                 match scope.typeMap.[fqn] with
-                | AnyTypeNode.Choice1Of2 node -> node
-                | AnyTypeNode.Choice2Of2 node ->
+                | Choice1Of3 node -> node
+                | Choice2Of3 node ->
                     let typeDef = node.typeDef
                     let args =
                         genArgs
@@ -335,13 +340,14 @@ let compile (m : Module) (compileUnit : CompileUnit) =
                         scope.closedGenericTypeMap.Add(key, node)
                         newClosedGenericTypes.Add((key, node))
                         node
+                | Choice3Of3 _ -> failwith "Enum type cannot contain other types."
             let rec visitTypeRef (typeRef : TypeRef) =
                 let fqn = (typeRef.typeNamespace, typeRef.typeName)
                 match typeRef.scope with
                 | None ->
                     let typeContainer = getNamespace typeRef.typeNamespace compileUnit
                     inst rootTypeScope typeContainer fqn
-                | Some(TypeRefScope(TypeSpec.Choice1Of2 enclosingTypeRef)) ->
+                | Some(TypeRefScope(Choice1Of2 enclosingTypeRef)) ->
                     let enclosingNode = visitTypeRef enclosingTypeRef
                     let typeContainer = box enclosingNode.typeEntry :?> ITypeContainer
                     inst enclosingNode.scope typeContainer fqn
@@ -353,23 +359,30 @@ let compile (m : Module) (compileUnit : CompileUnit) =
 
     // set types of members
     let rec visitScope (scope : TypeScope) =
-        if scope.typeMap <> null then
-            for kvp in scope.typeMap do
-                match kvp.Value with
-                | AnyTypeNode.Choice1Of2 node -> visitNode node
-                | AnyTypeNode.Choice2Of2 _ -> () // skip open generic types
+        for kvp in scope.typeMap do
+            match kvp.Value with
+            | Choice1Of3 node -> visitNode node
+            | Choice2Of3 _ -> () // skip open generic type
+            | Choice3Of3 _ -> () // skip enum types
 
     and visitNode node =
         let genArgs = (node.genArgs, [])
 
+        for size in Option.toArray node.typeDef.classSize do
+            if size <> 0 then
+                node.typeEntry.SetByteSize(Checked.uint32 size)
+
+        node.typeDef.packingSize // TODO
+        |> ignore
+
         // resolve base type
         match box node.typeEntry with
-        | :? MemberContainer as t ->
-            for typeSpec in Option.toArray node.typeDef.baseType do
+        | :? ComplexTypeBase as t ->
+            let inheritFrom typeSpec =
                 let entry =
                     match typeSpec with
-                    | TypeSpec.Choice1Of2 typeRef -> resolveTypeRef typeRef
-                    | TypeSpec.Choice2Of2 typeSig ->
+                    | Choice1Of2 typeRef -> resolveTypeRef typeRef
+                    | Choice2Of2 typeSig ->
                         match resolveTypeSig typeSig genArgs with
                         | None ->
                             // cannot derive from void
@@ -379,34 +392,40 @@ let compile (m : Module) (compileUnit : CompileUnit) =
                             | :? ManagedPointerTypeEntry as ptrType -> ptrType :> TypeEntry
                             | _ -> failwith "Invalid base type."
                 t.Inherit(entry)
+            for typeSpec in Option.toArray node.typeDef.baseType do
+                inheritFrom typeSpec
+            for typeSpec in node.typeDef.interfaces do
+                inheritFrom typeSpec
         | _ -> ()
 
         // fields
-        if node.fields <> null then
-            for fld, mem in node.fields do
-                mem.SetType(resolveTypeSig fld.typeSig genArgs)
+        for fld, mem in node.fields do
+            match resolveTypeSig fld.typeSig genArgs with
+            | None -> failwith "Field type cannot be void."
+            | Some typeEntry -> mem.SetType(typeEntry)
 
         // methods
-        if node.methods <> null then
-            for mth, sub in node.methods do
-                sub.SetReturnType(resolveTypeSig mth.signature.retType genArgs)
-                if mth.signature.callConv.hasThis then
-                    let paramType =
-                        match box node.typeEntry with
-                        | :? StructTypeEntry ->
-                            compileUnit.GetReferenceType(Some node.typeEntry) :> TypeEntry
-                        | _ ->
-                            compileUnit.GetManagedPointerType(node.typeEntry) :> TypeEntry
-                    let param = sub.AddParameter(paramType, None)
-                    param.SetArtificial()
-                    sub.SetObjectPointer(param)
-                for paramDefOpt, typeSig in Seq.zip mth.parameters mth.signature.paramTypes do
-                    match resolveTypeSig typeSig genArgs with
-                    | None -> failwith "Parameter type cannot be void."
-                    | Some paramType ->
-                        let nameOpt = paramDefOpt |> Option.map (fun paramDef -> paramDef.name)
-                        sub.AddParameter(paramType, nameOpt)
-                        |> ignore
+        for mth, sub in node.methods do
+            sub.SetReturnType(resolveTypeSig mth.signature.retType genArgs)
+            if mth.signature.callConv.hasThis then
+                let paramType =
+                    match box node.typeEntry with
+                    | :? StructTypeEntry ->
+                        compileUnit.GetReferenceType(Some node.typeEntry) :> TypeEntry
+                    | _ ->
+                        compileUnit.GetManagedPointerType(node.typeEntry) :> TypeEntry
+                let param = sub.AddParameter(paramType, None)
+                param.SetArtificial()
+                sub.SetObjectPointer(param)
+            for paramDefOpt, typeSig in Seq.zip mth.parameters mth.signature.paramTypes do
+                match resolveTypeSig typeSig genArgs with
+                | None -> failwith "Parameter type cannot be void."
+                | Some paramType ->
+                    let nameOpt = paramDefOpt |> Option.map (fun paramDef -> paramDef.name)
+                    sub.AddParameter(paramType, nameOpt)
+                    |> ignore
+            if mth.signature.callConv.callKind = CallKind.Vararg then
+                sub.AddUnspecifiedParameters()
 
         visitScope node.scope
 

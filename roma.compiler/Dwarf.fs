@@ -370,7 +370,7 @@ let serialize addrSize root =
         | Addr32 -> 4uy
         | Addr64 -> 8uy
 
-    [
+    seq {
         // .debug_info section
         yield section ".debug_info"
 
@@ -425,4 +425,4 @@ let serialize addrSize root =
                         yield Asm.String kvp.Key
                 }
             yield! Asm.toStrings lines
-    ]
+    }

@@ -482,8 +482,18 @@ type private ModuleLoader(pe : PEImageReader) =
             typeNamespace = row.TypeNamespace
             flags = row.Flags
 
-            packingSize = Option.map (fun row -> int row.PackingSize) layout
-            classSize = Option.map (fun row -> int row.ClassSize) layout
+            packingSize =
+                layout
+                |> Option.map (fun row -> int row.PackingSize)
+
+            classSize =
+                layout
+                |> Option.bind (
+                    fun row ->
+                        match int row.ClassSize with
+                        | 0 -> None
+                        | size -> Some size
+                )
 
             genericParams = this.LoadGenericParams(token)
 

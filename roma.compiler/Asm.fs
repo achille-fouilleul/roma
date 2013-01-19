@@ -34,19 +34,22 @@ type AsmLine =
 
 let private quoteString (s : string) =
     let buffer = System.Text.StringBuilder()
-    let inline bprintf s = Printf.bprintf buffer s
-    bprintf "\""
-    let bytes = System.Text.Encoding.UTF8.GetBytes(s)
-    for x in bytes do
-        match char x with
-        | '\t' -> bprintf "\\t"
-        | '\n' -> bprintf "\\n"
-        | '\r' -> bprintf "\\r"
-        | '"' ->  bprintf "\\\""
-        | c when c >= '\x20' && c <= '\x7f' -> bprintf "%c" c
-        | _ -> bprintf "\\x%02x" x
-    bprintf "\""
-    buffer.ToString()
+    if Seq.forall (fun c -> c <> '"' && (int c >= 0x20) && (int c < 0x7f)) s then
+        "\"" + s + "\""
+    else
+        let bytes = System.Text.Encoding.UTF8.GetBytes(s)
+        let inline bprintf s = Printf.bprintf buffer s
+        bprintf "\""
+        for x in bytes do
+            match char x with
+            | '\t' -> bprintf "\\t"
+            | '\n' -> bprintf "\\n"
+            | '\r' -> bprintf "\\r"
+            | '"' ->  bprintf "\\\""
+            | c when c >= '\x20' && c <= '\x7f' -> bprintf "%c" c
+            | _ -> bprintf "\\x%02x" x
+        bprintf "\""
+        buffer.ToString()
 
 let toStrings lines =
     let m = System.Collections.Generic.Dictionary<_, _>()

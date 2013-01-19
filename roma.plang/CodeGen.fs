@@ -157,7 +157,9 @@ let run (defs : TopLevelDef list) =
             for (name, _, typeExpr) in structDef.fields do
                 // TODO: check against multiple fields with the same name
                 let mem = entry.AddMember(name)
-                mem.SetType(evalTypeExpr typeExpr)
+                match evalTypeExpr typeExpr with
+                | None -> failwith "Field declared void."
+                | Some typeEntry -> mem.SetType(typeEntry)
 
         | TopTypeAlias _ -> ()
 
