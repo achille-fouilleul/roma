@@ -8,6 +8,13 @@ type CustomAttribute = {
 type Implementation =
     | Implementation_File of string
     | Implementation_AssemblyRef of AssemblyRefRow
+    | Implementation_ExportedType of ExportedType
+
+and ExportedType = {
+    typeName : string
+    typeNamespace : string
+    implementation : Implementation
+}
 
 type ManifestResource = {
     name : string
@@ -162,5 +169,6 @@ type Module = {
     fields : FieldDef list
     typeDefs : TypeDef list
     customAttrs : CustomAttribute list
-    // TODO: exported types
+    exportedTypes : ExportedType list
 }
+

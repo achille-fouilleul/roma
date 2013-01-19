@@ -34,7 +34,7 @@ type AsmLine =
 
 let private quoteString (s : string) =
     let buffer = System.Text.StringBuilder()
-    if Seq.forall (fun c -> c <> '"' && (int c >= 0x20) && (int c < 0x7f)) s then
+    if Seq.forall (fun c -> c <> '"' && (c >= '\x20') && (c < '\x7f')) s then
         "\"" + s + "\""
     else
         let bytes = System.Text.Encoding.UTF8.GetBytes(s)
@@ -46,7 +46,7 @@ let private quoteString (s : string) =
             | '\n' -> bprintf "\\n"
             | '\r' -> bprintf "\\r"
             | '"' ->  bprintf "\\\""
-            | c when c >= '\x20' && c <= '\x7f' -> bprintf "%c" c
+            | c when c >= '\x20' && c < '\x7f' -> bprintf "%c" c
             | _ -> bprintf "\\x%02x" x
         bprintf "\""
         buffer.ToString()

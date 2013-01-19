@@ -143,9 +143,6 @@ type private ModuleLoader(pe : PEImageReader) =
     let methodSpecTable = md.MethodSpecTable
     let genericParamConstraintTable = md.GenericParamConstraintTable
 
-    do if exportedTypeTable.Length <> 0 then
-        raise(NotImplementedException()) // TODO
-
     let eventMap =
         seq {
             for eventMapId in 1u .. uint32 eventMapTable.Length do
@@ -694,6 +691,28 @@ type private ModuleLoader(pe : PEImageReader) =
                     yield gp
             |]
 
+    member this.LoadExportedTypes() =
+        let rec loadExportedType index =
+            let row = exportedTypeTable.[index]
+            let impl = 
+                match CodedIndexes.implementation.Decode(row.Implementation) with
+                | (TableNumber.File, i) -> Implementation_File fileTable.[int i - 1].Name
+                | (TableNumber.ExportedType, i) -> Implementation_ExportedType(loadExportedType(int i - 1))
+                | (TableNumber.AssemblyRef, i) -> Implementation_AssemblyRef(assemblyRefTable.[int i - 1])
+                | _ -> failwith "invalid Implementation token"
+            let exportedType : ExportedType =
+                {
+                    typeName = row.TypeName
+                    typeNamespace = row.TypeNamespace
+                    implementation = impl
+                }
+            exportedType
+
+        [
+            for i in 0 .. (exportedTypeTable.Length - 1) ->
+                loadExportedType i
+        ]
+
     interface IModuleLoader with
         member this.GetLocalVarSig(token) =
             match token with
@@ -743,4 +762,5 @@ let loadModule (path : string) : Module =
         fields = fields
         typeDefs = mr.LoadTypeDefs()
         customAttrs = mr.LoadCustomAttributes((TableNumber.Module, 1u))
+        exportedTypes = mr.LoadExportedTypes()
     }
