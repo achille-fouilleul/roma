@@ -302,7 +302,7 @@ let serialize addrSize root =
         | DwValue.Bool _ -> DwForm.Flag
         | DwValue.Sdata _ -> DwForm.Sdata
         | DwValue.Udata _ -> DwForm.Udata
-        | DwValue.String _ -> DwForm.Strp // TODO: or String
+        | DwValue.String s -> if s.Length <= 3 then DwForm.String else DwForm.Strp
         | DwValue.Ref _ ->
             match addrSize with
             | Addr32 -> DwForm.Ref4
@@ -352,7 +352,11 @@ let serialize addrSize root =
                 | DwValue.Bool x -> yield Asm.U8(if x then 1uy else 0uy)
                 | DwValue.Udata x -> yield Asm.Uleb128 x
                 | DwValue.Sdata x -> yield Asm.Sleb128 x
-                | DwValue.String s -> yield Asm.Expr32(labelOfString s)
+                | DwValue.String s ->
+                    if s.Length <= 3 then
+                        yield Asm.String(s)
+                    else
+                        yield Asm.Expr32(labelOfString s)
                 | DwValue.Ref node ->
                     let label = nodeLabelMap.[node]
                     match addrSize with

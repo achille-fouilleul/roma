@@ -381,6 +381,21 @@ type internal Namespace(tree : DwTree, node : DwNode) =
             nsMap.Add(name, ns)
             ns
 
+type Module internal (tree : DwTree, name) =
+    let node = tree.Create(DwTag.Module, [ DwAt.Name, DwValue.String name ])
+    let ns = Namespace(tree, node) :> INamespace
+
+    interface INamespace with
+        member this.GetNamespace(name) = ns.GetNamespace(name)
+        member this.FindType(name) = ns.FindType(name)
+        member this.CreateEnumType(args) = ns.CreateEnumType(args)
+        member this.CreateStructType(name) = ns.CreateStructType(name)
+        member this.CreateClassType(name) = ns.CreateClassType(name)
+        member this.CreateInterfaceType(name) = ns.CreateInterfaceType(name)
+        member this.CreateTypedef(name) = ns.CreateTypedef(name)
+
+    member internal this.Node = node
+
 type CompileUnit(addrSize : AddrSize) =
     let ptrSize =
         match addrSize with
@@ -389,7 +404,8 @@ type CompileUnit(addrSize : AddrSize) =
 
     let tree = DwTree()
     let node = tree.Create(DwTag.CompileUnit, [ DwAt.UseUTF8, DwValue.Bool true ])
-    let globalNamespace = Namespace(tree, node)
+    let ns = Namespace(tree, node) :> INamespace
+    let modules = MutableList<_>()
     let variables = MutableList<_>()
     let subprograms = MutableList<_>()
     let primTypeMap = MutableMap<_, _>()
@@ -469,16 +485,14 @@ type CompileUnit(addrSize : AddrSize) =
                 map.Add(key, value)
                 value
 
-    let gns = globalNamespace :> INamespace
-
     interface INamespace with
-        member this.GetNamespace(name) = gns.GetNamespace(name)
-        member this.FindType(name) = gns.FindType(name)
-        member this.CreateEnumType(args) = gns.CreateEnumType(args)
-        member this.CreateStructType(name) = gns.CreateStructType(name)
-        member this.CreateClassType(name) = gns.CreateClassType(name)
-        member this.CreateInterfaceType(name) = gns.CreateInterfaceType(name)
-        member this.CreateTypedef(name) = gns.CreateTypedef(name)
+        member this.GetNamespace(name) = ns.GetNamespace(name)
+        member this.FindType(name) = ns.FindType(name)
+        member this.CreateEnumType(args) = ns.CreateEnumType(args)
+        member this.CreateStructType(name) = ns.CreateStructType(name)
+        member this.CreateClassType(name) = ns.CreateClassType(name)
+        member this.CreateInterfaceType(name) = ns.CreateInterfaceType(name)
+        member this.CreateTypedef(name) = ns.CreateTypedef(name)
 
     member this.GetPrimitiveType(kind) =
         memoize primTypeMap createPrimType kind
@@ -518,6 +532,12 @@ type CompileUnit(addrSize : AddrSize) =
         subprograms.Add(sub)
         node.AddChild(sub.Node)
         sub
+
+    member this.AddModule(name) =
+        let m = Module(tree, name)
+        modules.Add(m)
+        node.AddChild(m.Node)
+        m
 
     member this.WriteTo(path : string) =
         let text =

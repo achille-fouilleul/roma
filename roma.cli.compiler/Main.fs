@@ -1,5 +1,6 @@
 ﻿module Roma.Cli.Compiler.Main
 
+open Roma
 open Roma.Cli
 open Roma.Compiler
 open Roma.Compiler.Dwarf
@@ -90,7 +91,9 @@ let private addMethods (methodDefs : MethodDef list) addMethod (methods : Mutabl
             if (mth.flags &&& MethodAttributes.Virtual) = MethodAttributes.Virtual then
                 sub.SetVirtual((mth.flags &&& MethodAttributes.Abstract) = MethodAttributes.Abstract)
 
-let compile (m : Module) (compileUnit : CompileUnit) =
+let compile (m : Cli.Module) (compileUnit : CompileUnit) =
+
+    let destMod = compileUnit.AddModule(m.moduleName)
 
     let rootTypeScope = mkScope()
     let rootVariables = MutableList<_>()
@@ -174,7 +177,7 @@ let compile (m : Module) (compileUnit : CompileUnit) =
             else
                 createTypeEntry typeContainer typeDef typeDef.typeName initType addValues
 
-        let ns = getNamespace typeDef.typeNamespace compileUnit
+        let ns = getNamespace typeDef.typeNamespace destMod
         addType ns rootTypeScope typeDef
 
     addFields m.fields (fun name -> compileUnit.AddVariable(name)) rootVariables
@@ -185,7 +188,7 @@ let compile (m : Module) (compileUnit : CompileUnit) =
 
     let getSystemType ns name =
         // TODO: handle cases where current module is not the system library
-        (compileUnit :> INamespace).GetNamespace(ns).FindType(name)
+        (destMod :> INamespace).GetNamespace(ns).FindType(name)
 
     let primTypes =
         [
@@ -209,7 +212,7 @@ let compile (m : Module) (compileUnit : CompileUnit) =
     let rec resolveTypeRef (typeRef : TypeRef) =
         match typeRef.scope with
         | None ->
-            let ns = getNamespace typeRef.typeNamespace compileUnit
+            let ns = getNamespace typeRef.typeNamespace destMod
             ns.FindType(typeRef.typeName)
         | Some(TypeRefScope(Choice1Of2 enclosingType)) ->
             let typeEntry = resolveTypeRef enclosingType
@@ -345,7 +348,7 @@ let compile (m : Module) (compileUnit : CompileUnit) =
                 let fqn = (typeRef.typeNamespace, typeRef.typeName)
                 match typeRef.scope with
                 | None ->
-                    let typeContainer = getNamespace typeRef.typeNamespace compileUnit
+                    let typeContainer = getNamespace typeRef.typeNamespace destMod
                     inst rootTypeScope typeContainer fqn
                 | Some(TypeRefScope(Choice1Of2 enclosingTypeRef)) ->
                     let enclosingNode = visitTypeRef enclosingTypeRef
