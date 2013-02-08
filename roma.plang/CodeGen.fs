@@ -9,7 +9,9 @@ let run (defs : TopLevelDef list) =
 
     let targetAddrSize = Addr32 // TODO: target-dependent
 
-    let cu = CompileUnit(targetAddrSize)
+    let debugInfo = DwarfDebugInfo(targetAddrSize)
+
+    let cu = debugInfo.CompileUnit
     let globalNs = cu :> INamespace
 
     let structMap =
@@ -169,4 +171,5 @@ let run (defs : TopLevelDef list) =
 
         | TopFun _ -> raise(System.NotImplementedException()) // TODO
 
-    cu.WriteTo("-")
+    for line in debugInfo.Serialize() do
+        System.Console.WriteLine(line)

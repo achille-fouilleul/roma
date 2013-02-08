@@ -1,5 +1,7 @@
 ﻿module Roma.Compiler.Dwarf
 
+open Roma.Compiler
+
 type AddrSize =
     | Addr32
     | Addr64
@@ -29,7 +31,7 @@ type DwTag =
     | Inheritance = 0x1c
     | InlinedSubroutine = 0x1d
     | Module = 0x1e
-    | PrtToMemberType = 0x1f
+    | PtrToMemberType = 0x1f
     | SetType = 0x20
     | SubrangeType = 0x21
     | WithStmt = 0x22
@@ -215,11 +217,12 @@ type DwAbbrev =
         attrs : (DwAt * DwForm) list
     }
 
-type DwTree() =
-    member this.Create(tag, ?attrsOpt) =
-        DwNode(this, tag, defaultArg attrsOpt [])
+let mutable private nodeId = 0
 
-and DwNode(tree : DwTree, tag : DwTag, attrs : (DwAt * DwValue) list) =
+type DwNode(tag : DwTag, attrs : (DwAt * DwValue) list) =
+
+    let id = System.Threading.Interlocked.Increment(&nodeId)
+
     let attrs =
         let m = System.Collections.Generic.Dictionary<DwAt, DwValue>()
         for at, value in attrs do
@@ -230,7 +233,20 @@ and DwNode(tree : DwTree, tag : DwTag, attrs : (DwAt * DwValue) list) =
 
     let mutable frozen = false
 
-    member this.Tree = tree
+    let mutable parent : DwNode option = None
+
+    member this.Id = id
+
+    member this.Parent
+        with get() = parent
+        and private set node =
+            if frozen then
+                raise(System.InvalidOperationException())
+            if node = None then
+                raise(System.ArgumentNullException())
+            if parent <> None then
+                raise(System.InvalidOperationException())
+            parent <- node
 
     member this.Tag = tag
 
@@ -252,8 +268,7 @@ and DwNode(tree : DwTree, tag : DwTag, attrs : (DwAt * DwValue) list) =
     member this.AddChild(child : DwNode) =
         if frozen then
             raise(System.InvalidOperationException())
-        if child.Tree <> tree then
-            raise(System.InvalidOperationException())
+        child.Parent <- Some this
         children.Add(child)
 
     member this.Freeze() =
@@ -273,20 +288,280 @@ and DwValue =
     | String of string
     | Ref of DwNode
 
-let private section name =
-        match name with
-        | ".debug_info"
-        | ".debug_abbrev"
-        | ".debug_loc"
-        | ".debug_aranges"
-        | ".debug_line" ->
-            sprintf "\t.section %s,\"\",@progbits" name
-        | ".debug_str" ->
-            sprintf "\t.section %s,\"MS\",@progbits,1" name
-        | _ -> raise(System.NotSupportedException())
+let internal dwarfSection name =
+    match name with
+    | ".debug_info"
+    | ".debug_abbrev"
+    | ".debug_loc"
+    | ".debug_aranges"
+    | ".debug_line" ->
+        sprintf "\t.section %s,\"\",@progbits" name
+    | ".debug_str" ->
+        sprintf "\t.section %s,\"MS\",@progbits,1" name
+    | _ -> raise(System.NotSupportedException())
 
-let serialize addrSize root =
-    let stringLabelMap = System.Collections.Generic.Dictionary<_, _>()
+let private nodeName (node : DwNode) =
+    node.Attrs
+    |> Seq.tryPick (
+        function
+        | DwAt.Name, DwValue.String s -> Some s
+        | _ -> None
+    )
+
+let inline private enumBytes e =
+    Leb128.encode(uint32(LanguagePrimitives.EnumToValue e))
+
+let private stringBytes (s : string) =
+    seq {
+        yield! System.Text.Encoding.UTF8.GetBytes(s)
+        yield 0uy
+    }
+
+let private sigAttrs =
+    [
+        DwAt.Name
+        DwAt.Accessibility
+        DwAt.AddressClass
+        DwAt.Allocated
+        DwAt.Artificial
+        DwAt.Associated
+        DwAt.BinaryScale
+        DwAt.BitOffset
+        DwAt.BitSize
+        DwAt.BitStride
+        DwAt.ByteSize
+        DwAt.ByteStride
+        DwAt.ConstExpr
+        DwAt.ConstValue
+        DwAt.ContainingType
+        DwAt.Count
+        DwAt.DataBitOffset
+        DwAt.DataLocation
+        DwAt.DataMemberLocation
+        DwAt.DecimalScale
+        DwAt.DecimalSign
+        DwAt.DefaultValue
+        DwAt.DigitCount
+        DwAt.Discr
+        DwAt.DiscrList
+        DwAt.DiscrValue
+        DwAt.Encoding
+        DwAt.EnumClass
+        DwAt.Endianity
+        DwAt.Explicit
+        DwAt.IsOptional
+        DwAt.Location
+        DwAt.LowerBound
+        DwAt.Mutable
+        DwAt.Ordering
+        DwAt.PictureString
+        DwAt.Prototyped
+        DwAt.Small
+        DwAt.Segment
+        DwAt.StringLength
+        DwAt.ThreadsScaled
+        DwAt.UpperBound
+        DwAt.UseLocation
+        DwAt.UseUTF8
+        DwAt.VariableParameter
+        DwAt.Virtuality
+        DwAt.Visibility
+        DwAt.VtableElemLocation
+
+        // CLR-specific attributes
+        DwAt.ClrManaged
+    ]
+
+let rec nodeEq (node1 : DwNode) (node2 : DwNode) =
+    seq {
+        yield node1.Tag = node2.Tag
+        yield Seq.length node1.Attrs = Seq.length node2.Attrs
+        let atps = Seq.zip node1.Attrs node2.Attrs
+        yield atps |> Seq.forall (fun ((at1, val1), (at2, val2)) -> at1 = at2 && valueEq val1 val2)
+        yield Seq.length node1.Children = Seq.length node2.Children
+        let nps = Seq.zip node1.Children node2.Children
+        yield nps |> Seq.forall (fun (a, b) -> nodeEq a b)
+    }
+    |> Seq.forall id
+
+and valueEq (val1 : DwValue) (val2 : DwValue) =
+    match val1, val2 with
+    | DwValue.Ref node1, DwValue.Ref node2 -> nodeEq node1 node2
+    | _ -> val1 = val2
+
+let computeTypeSignature (typeNode : DwNode) =
+
+    let context (node : DwNode) =
+        let rec loop nodeOpt path =
+            match nodeOpt with
+            | Some node ->
+                match nodeName node with
+                | Some name -> loop node.Parent ((node.Tag, name) :: path)
+                | None -> path
+            | _ -> path
+ 
+        let path = loop node.Parent []
+        seq {
+            for (tag, name) in path do
+                yield byte 'C'
+                yield! enumBytes tag
+                yield! stringBytes name
+        }
+
+    let v = MutableList<_>()
+
+    let rec visit (node : DwNode) =
+        assert(Seq.forall ((<>) node) v)
+        v.Add(node)
+        seq {
+            yield byte 'D'
+            yield! enumBytes node.Tag
+            let attrMap =
+                let attrMap = node.Attrs |> Map.ofSeq
+                match attrMap |> Map.tryFind DwAt.Specification with
+                | None -> attrMap
+                | Some value ->
+                    match value with
+                    | DwValue.Ref node ->
+                        let specAttrMap = node.Attrs |> Map.ofSeq
+                        match specAttrMap |> Map.tryFind DwAt.Declaration with
+                        | Some(DwValue.Bool true) -> () // OK
+                        | _ -> failwith "DW_AT_specification does not refer to a DIE with DW_AT_declaration."
+                        seq {
+                            yield! Map.toSeq specAttrMap
+                            yield! Map.toSeq attrMap
+                        }
+                        |> Map.ofSeq
+                    | _ -> failwith "DW_AT_specification must refer to another DIE."
+
+            let processAttr at =
+                seq {
+                    match attrMap |> Map.tryFind at with
+                    | None -> ()
+                    | Some value ->
+                        let addAttr marker form xs =
+                            seq {
+                                yield byte marker
+                                yield! enumBytes at
+                                yield! enumBytes form
+                                yield! xs
+                            }
+
+                        match value with
+                        | DwValue.Bool x ->
+                            yield! addAttr 'A' DwForm.Sdata (Leb128.encode(if x then 1uy else 0uy))
+                        | DwValue.Sdata x ->
+                            yield! addAttr 'A' DwForm.Sdata (Leb128.encode x)
+                        | DwValue.Udata x ->
+                            yield! addAttr 'A' DwForm.Udata (Leb128.encode x)
+                        | DwValue.String x ->
+                            yield! addAttr 'A' DwForm.String (stringBytes x)
+                        | DwValue.Ref node ->
+                            match v |> Seq.tryFindIndex (nodeEq node) with
+                            | Some index ->
+                                yield byte 'R'
+                                yield! enumBytes at
+                                yield! Leb128.encode(uint32 index)
+                            | None ->
+                                yield byte 'T'
+                                yield! enumBytes at
+                                yield! context node
+                                yield! visit node
+                }
+
+            for at in sigAttrs do
+                yield! processAttr at
+
+            match node.Tag with
+            | DwTag.PointerType
+            | DwTag.ReferenceType
+            | DwTag.RvalueReferenceType
+            | DwTag.PtrToMemberType ->
+                (*
+                If the tag in Step 3 is one of DW_TAG_pointer_type, DW_TAG_reference_type,
+                DW_TAG_rvalue_reference_type, DW_TAG_ptr_to_member_type, or DW_TAG_friend,
+                and the referenced type (via the DW_AT_type or DW_AT_friend attribute) has
+                a DW_AT_name attribute, append to S the letter 'N', the DWARF attribute
+                code (DW_AT_type or DW_AT_friend), the context of the type (according to
+                the method in Step 2), the letter 'E', and the name of the type. For
+                DW_TAG_friend, if the referenced entry is a DW_TAG_subprogram, the context
+                is omitted and the name to be used is the ABI-specific name of the
+                subprogram (e.g., the mangled linker name).
+                If the tag in Step 3 is not one of DW_TAG_pointer_type,
+                DW_TAG_reference_type, DW_TAG_rvalue_reference_type,
+                DW_TAG_ptr_to_member_type, or DW_TAG_friend, but has a
+                DW_AT_type attribute, or if the referenced type (via the DW_AT_type or
+                DW_AT_friend attribute) does not have a DW_AT_name attribute, the
+                attribute is processed according to the method in Step 4 for an attribute
+                that refers to another type entry.
+                *)
+                match attrMap |> Map.tryFind DwAt.Type with
+                | None -> ()
+                | Some(DwValue.Ref node) ->
+                    match nodeName node with
+                    | Some name ->
+                        yield byte 'N'
+                        yield! enumBytes DwAt.Type
+                        yield! context node
+                        yield byte 'E'
+                        yield! stringBytes name
+                    | None ->
+                        yield! processAttr DwAt.Type
+                | _ -> failwith "DW_AT_type must refer to a type."
+            | DwTag.Friend ->
+                raise(System.NotImplementedException()) // TODO
+            | _ ->
+                yield! processAttr DwAt.Type
+
+            for child in node.Children do
+                (*
+                Visit each child C of the debugging information entry as follows: If C is
+                a nested type entry or a member function entry, and has a DW_AT_name
+                attribute, append to S the letter 'S', the tag of C, and its name;
+                otherwise, process C recursively by performing Steps 3 through 7,
+                appending the result to S.
+                *)
+                match nodeName child with
+                | Some name ->
+                    match child.Tag with
+                    | DwTag.ArrayType
+                    | DwTag.StructureType
+                    | DwTag.ClassType
+                    | DwTag.UnionType
+                    | DwTag.EnumerationType
+                    | DwTag.PointerType
+                    | DwTag.ReferenceType
+                    // TODO: other type tags
+                    | DwTag.Subprogram ->
+                        yield byte 'S'
+                        yield! enumBytes child.Tag
+                        yield! stringBytes name
+                    | _ -> yield! visit child
+                | None -> yield! visit child
+
+            yield 0uy
+        }
+
+    let s = 
+        seq {
+            yield! context typeNode
+            yield! visit typeNode
+        }
+        |> Seq.toArray
+
+    if false then
+        s
+        |> Seq.map (sprintf "%02x")
+        |> String.concat " "
+        |> printfn "%s"
+
+    let hash =
+        use md5 = System.Security.Cryptography.MD5.Create()
+        md5.ComputeHash(s)
+    Array.sub hash 8 8
+    |> Array.fold (fun n x -> (n <<< 8) ||| (uint64 x)) 0UL
+
+let serialize (stringLabelMap : MutableMap<_, _>, abbrevMap : MutableMap<_, _>, abbrevIndex) root =
 
     let labelOfString s =
         match stringLabelMap.TryGetValue(s) with
@@ -296,35 +571,25 @@ let serialize addrSize root =
             stringLabelMap.Add(s, label)
             label
 
-    let formOfValue (value : DwValue) =
-        match value with
-        | DwValue.Bool true -> DwForm.FlagPresent // TODO: or Flag
-        | DwValue.Bool _ -> DwForm.Flag
-        | DwValue.Sdata _ -> DwForm.Sdata
-        | DwValue.Udata _ -> DwForm.Udata
-        | DwValue.String s -> if s.Length <= 3 then DwForm.String else DwForm.Strp
-        | DwValue.Ref _ ->
-            match addrSize with
-            | Addr32 -> DwForm.Ref4
-            | Addr64 -> DwForm.Ref8
-
-    let nodeLabelMap = System.Collections.Generic.Dictionary<_, _>()
+    let nodeLabelMap = MutableMap<_, _>()
+    let nodeSet = MutableSet<_>()
 
     let rec pass1 (node : DwNode) =
-        if not(nodeLabelMap.ContainsKey(node)) then
-            node.Freeze()
-            nodeLabelMap.Add(node, Asm.createLabel())
+        node.Freeze()
+        if not(nodeLabelMap.ContainsKey(node.Id)) then
+            nodeLabelMap.Add(node.Id, Asm.createLabel())
+        if nodeSet.Add(node.Id) then
             for at, value in node.Attrs do
                 match value with
-                | DwValue.Ref node -> pass1 node
+                | DwValue.Ref node ->
+                    node.Freeze()
+                    if not(nodeLabelMap.ContainsKey(node.Id)) then
+                        nodeLabelMap.Add(node.Id, Asm.createLabel())
                 | _ -> ()
             for child in node.Children do
                 pass1 child
 
     pass1 root
-
-    let abbrevMap = System.Collections.Generic.Dictionary<_, _>()
-    let abbrevIndex = ref 1u
 
     let rec pass2 (node : DwNode) =
         let children = node.Children
@@ -333,7 +598,19 @@ let serialize addrSize root =
             {
                 tag = node.Tag
                 hasChildren = hasChildren
-                attrs = [ for at, value in node.Attrs -> (at, formOfValue value) ]
+                attrs =
+                    [
+                        for at, value in node.Attrs ->
+                            let form =
+                                match value with
+                                | DwValue.Bool true -> DwForm.FlagPresent // TODO: or Flag
+                                | DwValue.Bool _ -> DwForm.Flag
+                                | DwValue.Sdata _ -> DwForm.Sdata
+                                | DwValue.Udata _ -> DwForm.Udata
+                                | DwValue.String s -> if s.Length <= 3 then DwForm.String else DwForm.Strp
+                                | DwValue.Ref node -> if nodeSet.Contains(node.Id) then DwForm.Ref4 else DwForm.RefSig8
+                            at, form
+                    ]
             }
         let index =
             match abbrevMap.TryGetValue(abbrev) with
@@ -344,7 +621,7 @@ let serialize addrSize root =
                 abbrevIndex := index + 1u
                 index
         seq {
-            yield Asm.Label(nodeLabelMap.[node])
+            yield Asm.Label(nodeLabelMap.[node.Id])
             yield Asm.Uleb128(UInt128 index)
             for at, value in node.Attrs do
                 match value with
@@ -358,75 +635,16 @@ let serialize addrSize root =
                     else
                         yield Asm.Expr32(labelOfString s)
                 | DwValue.Ref node ->
-                    let label = nodeLabelMap.[node]
-                    match addrSize with
-                    | Addr32 -> yield Asm.Ref32 label
-                    | Addr64 -> yield Asm.Ref64 label
+                    if nodeSet.Contains(node.Id) then
+                        yield Asm.Ref32(nodeLabelMap.[node.Id])
+                    else
+                        let sig8 = computeTypeSignature node
+                        for i = 0 to 7 do
+                            yield Asm.U8(byte((sig8 >>> ((7 - i) * 8)) &&& 0xffUL))
             for child in children do
                 yield! pass2 child
             if hasChildren then
                 yield Asm.U8 0uy
         }
 
-    let dwarfVersion = 4us
-    let address_size =
-        match addrSize with
-        | Addr32 -> 4uy
-        | Addr64 -> 8uy
-
-    seq {
-        // .debug_info section
-        yield section ".debug_info"
-
-        let infoLines =
-            seq {
-                // compilation unit header
-                yield Asm.Expr32 ".Ldebug_info_end - .Ldebug_info_start"
-                yield Asm.Label ".Ldebug_info_start"
-                yield Asm.U16 dwarfVersion
-                yield Asm.Expr32 ".Ldebug_abbrev"
-                yield Asm.U8 address_size
-
-                yield! pass2 root
-
-                yield Asm.Label ".Ldebug_info_end"
-            }
-
-        yield! Asm.toStrings infoLines
-
-        // .debug_section section
-        yield section ".debug_abbrev"
-
-        let abbrevLines =
-            seq {
-                yield Asm.Label ".Ldebug_abbrev"
-                let abbrevs =
-                    abbrevMap
-                    |> Seq.sortBy (fun kvp -> kvp.Value)
-                for kvp in abbrevs do
-                    let abbrev = kvp.Key
-                    let index = kvp.Value
-                    yield Asm.Uleb128(UInt128 index)
-                    yield Asm.Uleb128(UInt128(LanguagePrimitives.EnumToValue abbrev.tag))
-                    yield Asm.U8(if abbrev.hasChildren then 1uy else 0uy)
-                    for at, form in abbrev.attrs do
-                        yield Asm.Uleb128(UInt128(LanguagePrimitives.EnumToValue at))
-                        yield Asm.Uleb128(UInt128(LanguagePrimitives.EnumToValue form))
-                    yield Asm.U8 0uy
-                    yield Asm.U8 0uy
-                yield Asm.U8 0uy
-            }
-
-        yield! Asm.toStrings abbrevLines
-
-        // .debug_str section
-        if stringLabelMap.Count <> 0 then
-            yield section ".debug_str"
-            let lines =
-                seq {
-                    for kvp in stringLabelMap do
-                        yield Asm.Label kvp.Value
-                        yield Asm.String kvp.Key
-                }
-            yield! Asm.toStrings lines
-    }
+    pass2 root, nodeLabelMap

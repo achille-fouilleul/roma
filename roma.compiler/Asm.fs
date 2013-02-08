@@ -51,6 +51,8 @@ let private quoteString (s : string) =
         bprintf "\""
         buffer.ToString()
 
+let private ii = System.Globalization.NumberFormatInfo.InvariantInfo
+
 let toStrings lines =
     let m = System.Collections.Generic.Dictionary<_, _>()
     let mutable offset = 0
@@ -72,12 +74,12 @@ let toStrings lines =
             | U64 x -> sprintf "\t.quad 0x%x" x
             | S64 x -> sprintf "\t.quad %d" x
             | Uleb128 x ->
-                sprintf "\t.uleb128 0x%s" (x.ToString("x", System.Globalization.NumberFormatInfo.InvariantInfo))
+                sprintf "\t.uleb128 0x%s" (x.ToString("x", ii))
             | Sleb128 x ->
                 if x >= Int128.Zero then
-                    sprintf "\t.sleb128 0x%s" (x.ToString("x", System.Globalization.NumberFormatInfo.InvariantInfo))
+                    sprintf "\t.sleb128 0x%s" (x.ToString("x", ii))
                 else
-                    sprintf "\t.sleb128 %s" (x.ToString(System.Globalization.NumberFormatInfo.InvariantInfo))
+                    sprintf "\t.sleb128 %s" (x.ToString(ii))
             | Ref32 label -> sprintf "\t.long %d" (Checked.uint32(m.[label]))
             | Ref64 label -> sprintf "\t.quad %d" (Checked.uint64(m.[label]))
             | String s -> sprintf "\t.string %s" (quoteString s)

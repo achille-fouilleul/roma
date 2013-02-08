@@ -2,9 +2,6 @@
 
 open Dwarf
 
-type private MutableMap<'k, 'v> = System.Collections.Generic.Dictionary<'k, 'v>
-type private MutableList<'t> = System.Collections.Generic.List<'t>
-
 // XXX: no checking against multiple enums with the same name in the same namespace
 
 type PrimitiveTypeKind =
@@ -27,8 +24,8 @@ type PrimitiveTypeKind =
     | Float64
 
 [<AbstractClass>]
-type TypeEntry internal (tree : DwTree, tag) =
-    let node = tree.Create(tag)
+type TypeEntry internal (tag) =
+    let node = DwNode(tag, [])
 
     static member internal Attr typeEntryOpt =
         seq {
@@ -41,7 +38,7 @@ type TypeEntry internal (tree : DwTree, tag) =
     member this.SetByteSize(size : uint32) =
         node.AddAttr(DwAt.ByteSize, DwValue.Sdata(Int128 size))
 
-and internal TypeContainer(tree, node : DwNode) =
+and internal TypeContainer(node : DwNode) =
 
     let typeMap = MutableMap<string, TypeEntry>()
 
@@ -54,19 +51,19 @@ and internal TypeContainer(tree, node : DwNode) =
         typeMap.[name]
 
     member this.CreateEnumType(name) =
-        add name (EnumTypeEntry(tree, name))
+        add name (EnumTypeEntry(name))
 
     member this.CreateStructType(name) =
-        add name (StructTypeEntry(tree, name))
+        add name (StructTypeEntry(name))
 
     member this.CreateClassType(name) =
-        add name (ClassTypeEntry(tree, name))
+        add name (ClassTypeEntry(name))
 
     member this.CreateInterfaceType(name) =
-        add name (InterfaceTypeEntry(tree, name))
+        add name (InterfaceTypeEntry(name))
 
     member this.CreateTypedef(name) =
-        add name (TypedefEntry(tree, name))
+        add name (TypedefEntry(name))
 
 and ITypeContainer =
     abstract FindType : string -> TypeEntry
@@ -76,8 +73,8 @@ and ITypeContainer =
     abstract CreateInterfaceType : string -> InterfaceTypeEntry
     abstract CreateTypedef : string -> TypedefEntry
 
-and EnumTypeEntry internal (tree, name) as this =
-    inherit TypeEntry(tree, DwTag.EnumerationType)
+and EnumTypeEntry internal (name) as this =
+    inherit TypeEntry(DwTag.EnumerationType)
 
     do this.Node.AddAttrs(
         [
@@ -95,7 +92,7 @@ and EnumTypeEntry internal (tree, name) as this =
 
     member this.AddValue(name, value) =
         let child =
-            tree.Create(
+            DwNode(
                 DwTag.Enumerator,
                 [
                     DwAt.Name, DwValue.String name
@@ -103,23 +100,23 @@ and EnumTypeEntry internal (tree, name) as this =
                 ])
         this.Node.AddChild(child)
 
-and StructTypeEntry internal (tree, name) =
-    inherit ComplexTypeBase(tree, DwTag.StructureType, name)
+and StructTypeEntry internal (name) =
+    inherit CompositeTypeBase(DwTag.StructureType, name)
     // TODO: DwAt.ByteSize
 
-and ClassTypeEntry internal (tree, name) =
-    inherit ComplexTypeBase(tree, DwTag.ClassType, name)
+and ClassTypeEntry internal (name) =
+    inherit CompositeTypeBase(DwTag.ClassType, name)
     // TODO: DwAt.ByteSize
 
-and InterfaceTypeEntry internal (tree, name) =
-    inherit ComplexTypeBase(tree, DwTag.InterfaceType, name)
+and InterfaceTypeEntry internal (name) =
+    inherit CompositeTypeBase(DwTag.InterfaceType, name)
 
-and [<AbstractClass>] ComplexTypeBase internal (tree, tag, name) as this =
-    inherit TypeEntry(tree, tag)
+and [<AbstractClass>] CompositeTypeBase internal (tag, name) as this =
+    inherit TypeEntry(tag)
 
     do this.Node.AddAttr(DwAt.Name, DwValue.String name)
 
-    let typeContainer = TypeContainer(tree, this.Node)
+    let typeContainer = TypeContainer(this.Node)
     let members = MutableList<_>()
     let subprograms = MutableList<_>()
 
@@ -135,7 +132,7 @@ and [<AbstractClass>] ComplexTypeBase internal (tree, tag, name) as this =
 
     member this.AddTypeParameter(name : string, paramType : TypeEntry) =
         this.Node.AddChild(
-            tree.Create(
+            DwNode(
                 DwTag.TemplateTypeParameter,
                 [
                     DwAt.Name, DwValue.String name
@@ -145,7 +142,7 @@ and [<AbstractClass>] ComplexTypeBase internal (tree, tag, name) as this =
 
     member this.Inherit(baseType : TypeEntry) =
         let child =
-            tree.Create(
+            DwNode(
                 DwTag.Inheritance,
                 [
                     DwAt.Type, DwValue.Ref baseType.Node
@@ -155,19 +152,19 @@ and [<AbstractClass>] ComplexTypeBase internal (tree, tag, name) as this =
         this.Node.AddChild(child)
 
     member this.AddMember(name) =
-        let mem = Member(tree, name)
+        let mem = Member(name)
         members.Add(mem)
         this.Node.AddChild(mem.Node)
         mem
 
     member this.AddSubprogram(name) =
-        let sub = Subprogram(tree, name)
+        let sub = Subprogram(name)
         subprograms.Add(sub)
         this.Node.AddChild(sub.Node)
         sub
 
-and Member internal (tree : DwTree, name : string) =
-    let node = tree.Create(DwTag.Member, [ DwAt.Name, DwValue.String name ])
+and Member internal (name : string) =
+    let node = DwNode(DwTag.Member, [ DwAt.Name, DwValue.String name ])
     // TODO: DwAt.DataMemberLocation
 
     member this.Node = node
@@ -175,8 +172,8 @@ and Member internal (tree : DwTree, name : string) =
     member this.SetType(memberType : TypeEntry) =
         node.AddAttr(DwAt.Type, DwValue.Ref memberType.Node)
 
-and Subprogram internal (tree : DwTree, name : string) =
-    let node = tree.Create(DwTag.Subprogram, [ DwAt.Name, DwValue.String name ])
+and Subprogram internal (name : string) =
+    let node = DwNode(DwTag.Subprogram, [ DwAt.Name, DwValue.String name ])
 
     member this.Node = node
 
@@ -184,12 +181,12 @@ and Subprogram internal (tree : DwTree, name : string) =
         node.AddAttrs(TypeEntry.Attr memberType)
 
     member this.AddParameter(paramType : TypeEntry, nameOpt : string option) =
-        let param = FormalParameter(tree, paramType, nameOpt)
+        let param = FormalParameter(paramType, nameOpt)
         node.AddChild(param.Node)
         param
 
     member this.AddUnspecifiedParameters() =
-        node.AddChild(tree.Create(DwTag.UnspecifiedParameters))
+        node.AddChild(DwNode(DwTag.UnspecifiedParameters, []))
 
     member this.SetObjectPointer(param : FormalParameter) =
         node.AddAttr(DwAt.ObjectPointer, DwValue.Ref param.Node)
@@ -197,9 +194,9 @@ and Subprogram internal (tree : DwTree, name : string) =
     member this.SetVirtual(isPure : bool) =
         node.AddAttr(DwAt.Virtuality, DwValue.Sdata(Int128(if isPure then 2 else 1)))
 
-and FormalParameter internal (tree : DwTree, paramType, nameOpt) =
+and FormalParameter internal (paramType, nameOpt) =
     let node =
-        tree.Create(
+        DwNode(
             DwTag.FormalParameter,
             [
                 yield DwAt.Type, DwValue.Ref paramType.Node
@@ -212,8 +209,8 @@ and FormalParameter internal (tree : DwTree, paramType, nameOpt) =
     member this.SetArtificial() =
         node.AddAttr(DwAt.Artificial, DwValue.Bool true)
 
-and TypedefEntry internal (tree, name) as this =
-    inherit TypeEntry(tree, DwTag.Typedef)
+and TypedefEntry internal (name) as this =
+    inherit TypeEntry(DwTag.Typedef)
 
     do this.Node.AddAttr(DwAt.Name, DwValue.String name)
 
@@ -226,13 +223,13 @@ and TypedefEntry internal (tree, name) as this =
             referencedType <- typeOpt
             this.Node.AddAttrs(TypeEntry.Attr typeOpt)
 
-type PrimitiveTypeEntry internal (tree, kind, name, encoding : DwAte, byteSize : uint32) as this =
-    inherit TypeEntry(tree, DwTag.BaseType)
+type PrimitiveTypeEntry internal (kind, name, encoding : DwAte, byteSize : uint32) as this =
+    inherit TypeEntry(DwTag.BaseType)
 
     do this.Node.AddAttrs(
         [
             DwAt.Name, DwValue.String name
-            DwAt.Encoding, DwValue.Udata(UInt128(LanguagePrimitives.EnumToValue encoding))
+            DwAt.Encoding, DwValue.Udata(UInt128(uint32 encoding))
             DwAt.ByteSize, DwValue.Udata(UInt128 byteSize)
         ])
 
@@ -242,22 +239,22 @@ type PrimitiveTypeEntry internal (tree, kind, name, encoding : DwAte, byteSize :
 
     member this.ByteSize = byteSize
 
-type ConstTypeEntry internal (tree, modifiedType : TypeEntry) as this =
-    inherit TypeEntry(tree, DwTag.ConstType)
+type ConstTypeEntry internal (modifiedType : TypeEntry) as this =
+    inherit TypeEntry(DwTag.ConstType)
 
     do this.Node.AddAttr(DwAt.Type, DwValue.Ref modifiedType.Node)
 
     member this.ModifiedType = modifiedType
 
-type VolatileTypeEntry internal (tree, modifiedType : TypeEntry) as this =
-    inherit TypeEntry(tree, DwTag.VolatileType)
+type VolatileTypeEntry internal (modifiedType : TypeEntry) as this =
+    inherit TypeEntry(DwTag.VolatileType)
 
     do this.Node.AddAttr(DwAt.Type, DwValue.Ref modifiedType.Node)
 
     member this.ModifiedType = modifiedType
 
-type PointerTypeEntry internal (tree, t, byteSize : uint32) as this =
-    inherit TypeEntry(tree, DwTag.PointerType)
+type PointerTypeEntry internal (t, byteSize : uint32) as this =
+    inherit TypeEntry(DwTag.PointerType)
 
     do this.Node.AddAttrs(
         [
@@ -267,8 +264,8 @@ type PointerTypeEntry internal (tree, t, byteSize : uint32) as this =
 
     member this.ReferencedType = t
 
-type ManagedPointerTypeEntry internal (tree, t : TypeEntry, byteSize : uint32) as this =
-    inherit TypeEntry(tree, DwTag.PointerType)
+type ManagedPointerTypeEntry internal (t : TypeEntry, byteSize : uint32) as this =
+    inherit TypeEntry(DwTag.PointerType)
 
     do this.Node.AddAttrs(
         [
@@ -279,8 +276,8 @@ type ManagedPointerTypeEntry internal (tree, t : TypeEntry, byteSize : uint32) a
 
     member this.ReferencedType = t
 
-type ReferenceTypeEntry internal (tree, t, byteSize : uint32) as this =
-    inherit TypeEntry(tree, DwTag.ReferenceType)
+type ReferenceTypeEntry internal (t, byteSize : uint32) as this =
+    inherit TypeEntry(DwTag.ReferenceType)
 
     do this.Node.AddAttrs(
         [
@@ -290,15 +287,15 @@ type ReferenceTypeEntry internal (tree, t, byteSize : uint32) as this =
 
     member this.ReferencedType = t
 
-type ArrayTypeEntry internal (tree, sizeType : TypeEntry, t, sizeOpt) as this =
-    inherit TypeEntry(tree, DwTag.ArrayType)
+type ArrayTypeEntry internal (sizeType : TypeEntry, t, sizeOpt) as this =
+    inherit TypeEntry(DwTag.ArrayType)
 
     do
         this.Node.AddAttrs(TypeEntry.Attr t)
         for size in Option.toArray sizeOpt do
             assert(size >= 1u)
             let child =
-                tree.Create(
+                DwNode(
                     DwTag.SubrangeType,
                     [
                         DwAt.Type, DwValue.Ref sizeType.Node
@@ -306,8 +303,8 @@ type ArrayTypeEntry internal (tree, sizeType : TypeEntry, t, sizeOpt) as this =
                     ])
             this.Node.AddChild(child)
 
-type ManagedArrayTypeEntry internal (tree, sizeType : TypeEntry, elemType : TypeEntry, shapeOpt) as this =
-    inherit TypeEntry(tree, DwTag.ArrayType)
+type ManagedArrayTypeEntry internal (sizeType : TypeEntry, elemType : TypeEntry, shapeOpt) as this =
+    inherit TypeEntry(DwTag.ArrayType)
 
     do
         this.Node.AddAttrs(
@@ -319,7 +316,7 @@ type ManagedArrayTypeEntry internal (tree, sizeType : TypeEntry, elemType : Type
         for shape in Option.toArray shapeOpt do
             for (lo : int, sizeOpt : int option) in (shape : list<_>) do
                 this.Node.AddChild(
-                    tree.Create(
+                    DwNode(
                         DwTag.SubrangeType,
                         [
                             yield DwAt.LowerBound, DwValue.Sdata(Int128 lo)
@@ -328,8 +325,8 @@ type ManagedArrayTypeEntry internal (tree, sizeType : TypeEntry, elemType : Type
 
     member this.ElementType = elemType
 
-type SubroutineTypeEntry internal (tree, retType, paramTypes) as this =
-    inherit TypeEntry(tree, DwTag.SubroutineType)
+type SubroutineTypeEntry internal (retType, paramTypes) as this =
+    inherit TypeEntry(DwTag.SubroutineType)
 
     do
         this.Node.AddAttrs(
@@ -339,15 +336,15 @@ type SubroutineTypeEntry internal (tree, retType, paramTypes) as this =
             ])
         for paramType in paramTypes do
             let child =
-                tree.Create(
+                DwNode(
                     DwTag.FormalParameter,
                     [
                         yield! TypeEntry.Attr paramType
                     ])
             this.Node.AddChild(child)
 
-type Variable internal (tree : DwTree, name : string) =
-    let node = tree.Create(DwTag.Variable, [ DwAt.Name, DwValue.String name ])
+type Variable internal (name : string) =
+    let node = DwNode(DwTag.Variable, [ DwAt.Name, DwValue.String name ])
 
     member this.Node = node
 
@@ -358,9 +355,9 @@ type INamespace =
     inherit ITypeContainer
     abstract GetNamespace : string -> INamespace
 
-type internal Namespace(tree : DwTree, node : DwNode) =
+type internal Namespace(node : DwNode) =
     let nsMap = MutableMap<_, _>()
-    let typeContainer = TypeContainer(tree, node)
+    let typeContainer = TypeContainer(node)
 
     interface INamespace with
         member this.GetNamespace(name) = this.GetNamespace(name) :> INamespace
@@ -375,15 +372,15 @@ type internal Namespace(tree : DwTree, node : DwNode) =
         match nsMap.TryGetValue(name) with
         | true, ns -> ns
         | _ ->
-            let child = tree.Create(DwTag.Namespace, [ DwAt.Name, DwValue.String name ])
+            let child = DwNode(DwTag.Namespace, [ DwAt.Name, DwValue.String name ])
             node.AddChild(child)
-            let ns = Namespace(tree, child)
+            let ns = Namespace(child)
             nsMap.Add(name, ns)
             ns
 
-type Module internal (tree : DwTree, name) =
-    let node = tree.Create(DwTag.Module, [ DwAt.Name, DwValue.String name ])
-    let ns = Namespace(tree, node) :> INamespace
+type Module internal (name) =
+    let node = DwNode(DwTag.Module, [ DwAt.Name, DwValue.String name ])
+    let ns = Namespace(node) :> INamespace
 
     interface INamespace with
         member this.GetNamespace(name) = ns.GetNamespace(name)
@@ -396,15 +393,14 @@ type Module internal (tree : DwTree, name) =
 
     member internal this.Node = node
 
-type CompileUnit(addrSize : AddrSize) =
+type UnitBase(tag, addrSize : AddrSize) =
     let ptrSize =
         match addrSize with
         | Addr32 -> 4u
         | Addr64 -> 8u
 
-    let tree = DwTree()
-    let node = tree.Create(DwTag.CompileUnit, [ DwAt.UseUTF8, DwValue.Bool true ])
-    let ns = Namespace(tree, node) :> INamespace
+    let node = DwNode(tag, [ DwAt.UseUTF8, DwValue.Bool true ])
+    let ns = Namespace(node) :> INamespace
     let modules = MutableList<_>()
     let variables = MutableList<_>()
     let subprograms = MutableList<_>()
@@ -439,23 +435,23 @@ type CompileUnit(addrSize : AddrSize) =
             | PrimitiveTypeKind.UIntPtr -> "uintptr_t", DwAte.Unsigned, ptrSize
             | PrimitiveTypeKind.Float32 -> "float32_t", DwAte.Float, 4u
             | PrimitiveTypeKind.Float64 -> "float64_t", DwAte.Float, 8u
-        PrimitiveTypeEntry(tree, kind, name, encoding, byteSize)
+        PrimitiveTypeEntry(kind, name, encoding, byteSize)
 
     let sizeType =
         lazy (
-            let entry = PrimitiveTypeEntry(tree, PrimitiveTypeKind.UIntPtr, "sizetype", DwAte.Unsigned, ptrSize)
+            let entry = PrimitiveTypeEntry(PrimitiveTypeKind.UIntPtr, "sizetype", DwAte.Unsigned, ptrSize)
             node.AddChild(entry.Node)
             entry
         )
 
-    let createConstType modifiedType = ConstTypeEntry(tree, modifiedType)
-    let createVolatileType modifiedType = VolatileTypeEntry(tree, modifiedType)
-    let createPointerType typeOpt = PointerTypeEntry(tree, typeOpt, ptrSize)
-    let createManagedPointerType referencedType = ManagedPointerTypeEntry(tree, referencedType, ptrSize)
-    let createReferenceType typeOpt = ReferenceTypeEntry(tree, typeOpt, ptrSize)
-    let createArrayType(typeOpt, size) = ArrayTypeEntry(tree, sizeType.Force(), typeOpt, size)
-    let createManagedArrayType(elemType, shape) = ManagedArrayTypeEntry(tree, sizeType.Force(), elemType, shape)
-    let createSubroutineType(retType, paramTypes) = SubroutineTypeEntry(tree, retType, paramTypes)
+    let createConstType modifiedType = ConstTypeEntry(modifiedType)
+    let createVolatileType modifiedType = VolatileTypeEntry(modifiedType)
+    let createPointerType typeOpt = PointerTypeEntry(typeOpt, ptrSize)
+    let createManagedPointerType referencedType = ManagedPointerTypeEntry(referencedType, ptrSize)
+    let createReferenceType typeOpt = ReferenceTypeEntry(typeOpt, ptrSize)
+    let createArrayType(typeOpt, size) = ArrayTypeEntry(sizeType.Force(), typeOpt, size)
+    let createManagedArrayType(elemType, shape) = ManagedArrayTypeEntry(sizeType.Force(), elemType, shape)
+    let createSubroutineType(retType, paramTypes) = SubroutineTypeEntry(retType, paramTypes)
 
     let memoize (map : MutableMap<_, _>) f key =
         match map.TryGetValue(key) with
@@ -474,6 +470,7 @@ type CompileUnit(addrSize : AddrSize) =
             | None ->
                 let value : #TypeEntry = f keyOpt
                 node.AddChild(value.Node)
+                assert(!voidRef = None)
                 voidRef := Some value
                 value
         | Some key ->
@@ -522,30 +519,24 @@ type CompileUnit(addrSize : AddrSize) =
         memoize subroutineTypeMap createSubroutineType (retType, paramTypes)
 
     member this.AddVariable(name) =
-        let var = Variable(tree, name)
+        let var = Variable(name)
         variables.Add(var)
         node.AddChild(var.Node)
         var
 
     member this.AddSubprogram(name) =
-        let sub = Subprogram(tree, name)
+        let sub = Subprogram(name)
         subprograms.Add(sub)
         node.AddChild(sub.Node)
         sub
 
     member this.AddModule(name) =
-        let m = Module(tree, name)
+        let m = Module(name)
         modules.Add(m)
         node.AddChild(m.Node)
         m
 
-    member this.WriteTo(path : string) =
-        let text =
-            let buffer = System.Text.StringBuilder()
-            for line in Dwarf.serialize addrSize node do
-                buffer.AppendLine(line) |> ignore
-            buffer.ToString()
-        if path = "-" then
-            System.Console.Write(text)
-        else
-            System.IO.File.WriteAllText(path, text)
+    member internal this.Node = node
+
+type CompileUnit(addrSize : AddrSize) =
+    inherit UnitBase(DwTag.CompileUnit, addrSize)

@@ -39,11 +39,26 @@ and EnumTypeNode =
 
 and AnyTypeNode = Choice<TypeNode, OpenGenericTypeNode, EnumTypeNode>
 
-let getNamespace fqn (ns : INamespace) =
+let private getNamespace fqn (ns : INamespace) =
     if System.String.IsNullOrEmpty(fqn) then
         ns
     else
         ns.GetNamespace(fqn)
+
+let private int128OfConstant c =
+    match c with
+    | ConstantBool false -> Int128.Zero
+    | ConstantBool true -> Int128.One
+    | ConstantChar x -> Int128(uint32 x)
+    | ConstantI1 x -> Int128(int32 x)
+    | ConstantU1 x -> Int128(uint32 x)
+    | ConstantI2 x -> Int128(int32 x)
+    | ConstantU2 x -> Int128(uint32 x)
+    | ConstantI4 x -> Int128(x)
+    | ConstantU4 x -> Int128(x)
+    | ConstantI8 x -> Int128(x)
+    | ConstantU8 x -> Int128(x)
+    | _ -> failwith "Invalid constant type for enum."
 
 let mkScope() : TypeScope =
     {
@@ -55,14 +70,14 @@ let rec typeEntryDescription (entry : TypeEntry) =
     match box entry with
     | :? EnumTypeEntry as entry -> entry.Name
     | :? PrimitiveTypeEntry as entry -> entry.Name
-    | :? ComplexTypeBase as entry -> entry.Name
+    | :? CompositeTypeBase as entry -> entry.Name
     | :? ManagedPointerTypeEntry as entry ->
         typeEntryDescription entry.ReferencedType
     | :? ManagedArrayTypeEntry as entry ->
         typeEntryDescription entry.ElementType + "[]"
     | _ -> raise(System.NotImplementedException()) // TODO: arrays, etc.
 
-let private createTypeEntry (scope : ITypeContainer) (typeDef : TypeDef) name (initType : ComplexTypeBase -> 't) addValues =
+let private createTypeEntry (scope : ITypeContainer) (typeDef : TypeDef) name (initType : CompositeTypeBase -> 't) addValues =
     if (typeDef.flags &&& TypeAttributes.ClassSemanticsMask) = TypeAttributes.Interface then
         scope.CreateInterfaceType(name) |> initType
     else
@@ -102,7 +117,7 @@ let compile (m : Cli.Module) (compileUnit : CompileUnit) =
 
     for typeDef in m.typeDefs do
         let rec addType typeContainer (scope : TypeScope) (typeDef : TypeDef) =
-            let initType (entry : ComplexTypeBase) =
+            let initType (entry : CompositeTypeBase) =
                 let scope' = mkScope()
                 let node : TypeNode =
                     {
@@ -126,22 +141,7 @@ let compile (m : Cli.Module) (compileUnit : CompileUnit) =
                 for fld in typeDef.fields do
                     if (fld.flags &&& FieldAttributes.Static) = FieldAttributes.Static then
                         match fld.constant with
-                        | Some c ->
-                            let value =
-                                match c with
-                                | ConstantBool false -> Int128.Zero
-                                | ConstantBool true -> Int128.One
-                                | ConstantChar x -> Int128(uint32 x)
-                                | ConstantI1 x -> Int128(int32 x)
-                                | ConstantU1 x -> Int128(uint32 x)
-                                | ConstantI2 x -> Int128(int32 x)
-                                | ConstantU2 x -> Int128(uint32 x)
-                                | ConstantI4 x -> Int128(x)
-                                | ConstantU4 x -> Int128(x)
-                                | ConstantI8 x -> Int128(x)
-                                | ConstantU8 x -> Int128(x)
-                                | _ -> failwith "Invalid constant type for enum."
-                            entry.AddValue(fld.name, value)
+                        | Some c -> entry.AddValue(fld.name, int128OfConstant c)
                         | None -> () // TODO: emit diagnostic
                     else
                         // TODO: check that there is exactly one such field
@@ -380,7 +380,7 @@ let compile (m : Cli.Module) (compileUnit : CompileUnit) =
 
         // resolve base type
         match box node.typeEntry with
-        | :? ComplexTypeBase as t ->
+        | :? CompositeTypeBase as t ->
             let inheritFrom typeSpec =
                 let entry =
                     match typeSpec with
