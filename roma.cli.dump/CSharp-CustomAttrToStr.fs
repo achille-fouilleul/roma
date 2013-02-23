@@ -240,7 +240,7 @@ let private parseAssemblyRef (r : CharReader) =
     for name, value in kvs do
         match name with
         | "Version" ->
-            let vs = value.Split('.') |> Array.map uint16
+            let vs = value.Split('.') |> Array.map Checked.uint16
             if vs.Length <> 4 then
                 error r
             assemblyRef <- { assemblyRef with MajorVersion = vs.[0]; MinorVersion = vs.[1]; BuildNumber = vs.[2]; RevisionNumber = vs.[3] }

@@ -2,10 +2,6 @@
 
 open Roma.Compiler
 
-type AddrSize =
-    | Addr32
-    | Addr64
-
 type DwTag =
     | ArrayType = 0x01
     | ClassType = 0x02

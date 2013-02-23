@@ -39,6 +39,7 @@
     <Reference Include="System.Numerics" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="AssemblyResolution.fs" />
     <Compile Include="Main.fs" />
   </ItemGroup>
   <ItemGroup>

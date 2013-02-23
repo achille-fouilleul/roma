@@ -4,6 +4,10 @@ open Dwarf
 
 // XXX: no checking against multiple enums with the same name in the same namespace
 
+type AddrSize =
+    | Addr32
+    | Addr64
+
 type PrimitiveTypeKind =
     | Bool
     | Null

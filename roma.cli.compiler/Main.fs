@@ -82,9 +82,10 @@ let private createTypeEntry (scope : ITypeContainer) (typeDef : TypeDef) name (i
         scope.CreateInterfaceType(name) |> initType
     else
         // FIXME: check of base type is name-based
-        if (typeDef.typeNamespace, typeDef.typeName) = ("System", "Enum") then
+        match typeDef with
+        | { typeNamespace = "System"; typeName = "Enum" } ->
             scope.CreateClassType(name) |> initType
-        else
+        | _ ->
             match typeDef.baseType with
             | Some(Choice1Of2 { typeNamespace = "System"; typeName = "Enum" }) ->
                 scope.CreateEnumType(name) |> addValues
@@ -293,8 +294,8 @@ let compile (m : Cli.Module) (compileUnit : CompileUnit) =
             | TypeSig.Void -> None
             | TypeSig.ModReq(modType, typeSig) ->
                 // FIXME: name-based type check
-                match (modType.typeNamespace, modType.typeName) with
-                | ("System.Runtime.CompilerServices", "IsVolatile") ->
+                match modType with
+                | { typeNamespace = "System.Runtime.CompilerServices"; typeName = "IsVolatile" } ->
                     match visitTypeSig typeSig with
                     | None -> failwith "Volatile modifier cannot be applied to void type."
                     | Some t -> Some(compileUnit.GetVolatileType(t) :> TypeEntry)
