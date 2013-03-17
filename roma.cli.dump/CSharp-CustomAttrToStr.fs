@@ -218,17 +218,15 @@ let private parseAssemblyRef (r : CharReader) =
 
     let name = buf.ToString()
 
-    let mutable assemblyRef : AssemblyRefRow =
+    let mutable assemblyRef : AssemblyRef =
         {
-            MajorVersion = 0us
-            MinorVersion = 0us
-            BuildNumber = 0us
-            RevisionNumber = 0us
-            Flags = LanguagePrimitives.EnumOfValue 0u
-            PublicKeyOrToken = null
-            Name = name
-            Culture = null
-            HashValue = null
+            version = (0us, 0us, 0us, 0us)
+            flags = LanguagePrimitives.EnumOfValue 0u
+            publicKeyOrToken = null
+            name = name
+            culture = null
+            hashValue = null
+            customAttrs = []
         }
 
     let kvs =
@@ -243,11 +241,11 @@ let private parseAssemblyRef (r : CharReader) =
             let vs = value.Split('.') |> Array.map Checked.uint16
             if vs.Length <> 4 then
                 error r
-            assemblyRef <- { assemblyRef with MajorVersion = vs.[0]; MinorVersion = vs.[1]; BuildNumber = vs.[2]; RevisionNumber = vs.[3] }
+            assemblyRef <- { assemblyRef with version = (vs.[0], vs.[1], vs.[2], vs.[3]) }
         | "Culture" ->
-            assemblyRef <- { assemblyRef with Culture = if value = "neutral" then null else value }
+            assemblyRef <- { assemblyRef with culture = if value = "neutral" then null else value }
         | "PublicKeyToken" ->
-            assemblyRef <- { assemblyRef with Flags = assemblyRef.Flags &&& ~~~AssemblyFlags.PublicKey; PublicKeyOrToken = parseBlob value }
+            assemblyRef <- { assemblyRef with flags = assemblyRef.flags &&& ~~~AssemblyFlags.PublicKey; publicKeyOrToken = parseBlob value }
         | _ ->
             Diagnostics.Debugger.Break()
             raise(NotImplementedException()) // TODO
@@ -279,10 +277,9 @@ let private parseTypeSpec resolveTypeRef (s : string) =
                     r.Advance()
                     let name = parseTypeName r
                     loop (fun typeRef ->
-                        let typeSpec = TypeSpec.Choice1Of2(f typeRef)
                         let typeRef' : TypeRef =
                             {
-                                scope = Some(TypeRefScope typeSpec)
+                                scope = Some(TypeRefScope(f typeRef))
                                 typeNamespace = null
                                 typeName = name
                             }

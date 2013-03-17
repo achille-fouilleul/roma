@@ -43,18 +43,13 @@ and typeRefToStr resolveTypeRef varMap byRefDir typeRef =
 
     let rec loop typeRef =
         match typeRef.scope with
-        | Some(TypeRefScope enclosingTypeSpec) ->
-            match enclosingTypeSpec with
-            | TypeSpec.Choice1Of2 enclosingTypeRef ->
-                let typeDef, s, i = loop enclosingTypeRef
-                let typeDef' =
-                    typeDef.nestedTypes
-                    |> Seq.find (fun typeDef -> typeDef.typeName = typeRef.typeName)
-                let name, i' = makeName typeDef' i
-                typeDef', s + "." + name, i'
-            | _ ->
-                Diagnostics.Debugger.Break()
-                raise(NotImplementedException()) // TODO: can this happen?
+        | Some(TypeRefScope enclosingTypeRef) ->
+            let typeDef, s, i = loop enclosingTypeRef
+            let typeDef' =
+                typeDef.nestedTypes
+                |> Seq.find (fun typeDef -> typeDef.typeName = typeRef.typeName)
+            let name, i' = makeName typeDef' i
+            typeDef', s + "." + name, i'
         | _ ->
             let typeDef = resolveTypeRef typeRef
             let name, i' = makeName typeDef 0
@@ -124,19 +119,13 @@ and typeSigToStr resolveTypeRef (varMap : GenVarMap) byRefDir typeSig =
 
             let rec loop typeRef =
                 match typeRef.scope with
-                | Some(TypeRefScope enclosingTypeSpec) ->
-                    match enclosingTypeSpec with
-                    | TypeSpec.Choice1Of2 enclosingTypeRef ->
-                        let typeDef, s, i = loop enclosingTypeRef
-                        let typeDef' =
-                            typeDef.nestedTypes
-                            |> Seq.find (fun typeDef -> typeDef.typeName = typeRef.typeName)
-                        let name, i' = makeName typeDef' i
-                        typeDef', s + "." + name, i'
-
-                    | _ ->
-                        Diagnostics.Debugger.Break()
-                        raise(NotImplementedException()) // TODO: can this happen?
+                | Some(TypeRefScope enclosingTypeRef) ->
+                    let typeDef, s, i = loop enclosingTypeRef
+                    let typeDef' =
+                        typeDef.nestedTypes
+                        |> Seq.find (fun typeDef -> typeDef.typeName = typeRef.typeName)
+                    let name, i' = makeName typeDef' i
+                    typeDef', s + "." + name, i'
                 | _ ->
                     let typeDef = resolveTypeRef typeRef
                     let name, i' = makeName typeDef 0

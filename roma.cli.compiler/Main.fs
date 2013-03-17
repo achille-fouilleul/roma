@@ -107,7 +107,7 @@ let private addMethods (methodDefs : MethodDef list) addMethod (methods : Mutabl
             if (mth.flags &&& MethodAttributes.Virtual) = MethodAttributes.Virtual then
                 sub.SetVirtual((mth.flags &&& MethodAttributes.Abstract) = MethodAttributes.Abstract)
 
-let compile (m : Cli.Module) (compileUnit : CompileUnit) =
+let compile (resolver : AssemblyResolver) (m : Cli.Module) (compileUnit : CompileUnit) =
 
     let destMod = compileUnit.AddModule(m.moduleName)
 
@@ -188,8 +188,7 @@ let compile (m : Cli.Module) (compileUnit : CompileUnit) =
         Some(compileUnit.GetPrimitiveType(kind) :> TypeEntry)
 
     let getSystemType ns name =
-        // TODO: handle cases where current module is not the system library
-        (destMod :> INamespace).GetNamespace(ns).FindType(name)
+        resolver.SystemLibrary.GetType(ns, name)
 
     let primTypes =
         [

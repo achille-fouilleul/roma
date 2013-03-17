@@ -1,13 +1,8 @@
 ﻿namespace Roma.Cli
 
-type CustomAttribute = {
-    methodRef : MethodRef
-    value : byte[]
-}
-
 type Implementation =
     | Implementation_File of string
-    | Implementation_AssemblyRef of AssemblyRefRow
+    | Implementation_AssemblyRef of AssemblyRef
     | Implementation_ExportedType of ExportedType
 
 and ExportedType = {
@@ -37,16 +32,6 @@ type Assembly = {
     name : string
     culture : string
     declSec : DeclSecurity list
-    customAttrs : CustomAttribute list
-}
-
-type AssemblyRef = {
-    version : Version
-    flags : AssemblyFlags
-    publicKeyOrToken : byte[]
-    name : string
-    culture : string
-    hashValue : byte[]
     customAttrs : CustomAttribute list
 }
 

@@ -7,11 +7,9 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>{2967474b-7e70-4f29-97af-a360e748baa6}</ProjectGuid>
     <OutputType>Library</OutputType>
-    <RootNamespace>roma.compiler</RootNamespace>
+    <RootNamespace>Roma.Compiler</RootNamespace>
     <AssemblyName>roma.compiler</AssemblyName>
-    <TargetFrameworkVersion>v4.0</TargetFrameworkVersion>
     <Name>roma.compiler</Name>
-    <TargetFrameworkProfile>Client</TargetFrameworkProfile>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <DebugSymbols>true</DebugSymbols>
@@ -34,7 +32,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="mscorlib" />
-    <Reference Include="FSharp.Core" />
     <Reference Include="System" />
     <Reference Include="System.Core" />
     <Reference Include="System.Numerics" />

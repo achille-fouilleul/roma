@@ -61,9 +61,9 @@ and typeRefToStr typeRef =
 
 and resolutionScopeToStr scope =
     match scope with
-    | TypeRefScope typeSpec -> typeSpecToStr typeSpec
+    | TypeRefScope typeRef -> typeRefToStr typeRef
     | ModuleRefScope moduleRef -> "." + moduleRef
-    | AssemblyRefScope assemblyRef -> assemblyRef.Name // TODO: include details
+    | AssemblyRefScope assemblyRef -> assemblyRef.name // TODO: include details
 
 and typeSigToStr typeSig =
     match typeSig with

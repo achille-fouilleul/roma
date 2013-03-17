@@ -11,11 +11,12 @@ module private HexUtils =
         if x < 10uy then '0' + char x else 'a' + char(x - 10uy)
 
     let toHexString (blob : byte array) =
-        let chars = Array.zeroCreate (2 * blob.Length)
-        for i = 0 to blob.Length - 1 do
-            let x = blob.[i]
-            chars.[2 * i] <- toHexDigit(x >>> 4)
-            chars.[2 * i + 1] <- toHexDigit(x &&& 0xfuy)
+        let chars =
+            [|
+                for x in blob do
+                    yield toHexDigit(x >>> 4)
+                    yield toHexDigit(x &&& 0xfuy)
+            |]
         System.String(chars)
 
 type PublicKeyOrToken =
@@ -85,7 +86,6 @@ type AssemblyName =
             }
         name
 
-
     member this.Matches(candidate) =
         match candidate with
         | _ when this.name <> candidate.name -> false
@@ -99,20 +99,6 @@ type AssemblyName =
         | _ when not(PublicKeyOrToken.Matches this.publicKeyOrToken candidate.publicKeyOrToken) -> false
         | _ -> true
 
-type Assembly internal (path) =
-    let manifestModule = ModuleLoading.loadModule path
-    let manifest =
-        match manifestModule.assembly with
-        | Some asm -> asm
-        | None -> failwith "Manifest missing."
-    let imageHash = Roma.Cli.PEImageReader(path).StrongNameHash
-
-    member this.Path = path
-
-    member this.Hash = imageHash
-
-    member this.Name = AssemblyName.FromAssemblyManifest(manifest)
-
 (*
 TODO: review assembly resolution algorithm
 - context 1 ("load context"): GAC or private assembly store. (Assembly.Load())
@@ -120,13 +106,13 @@ TODO: review assembly resolution algorithm
 - context 3 ("reflection-only context"): no execution. (Assembly.ReflectionOnlyLoad(), ReflectionOnlyLoadFrom())
 - no context: user-provided byte array.
 *)
-type AssemblyResolver(sysLibPath, dirs, gac1Dirs, gac2Dirs) =
+type AssemblyResolver(sysLibPath, dirs, gac1Dirs, gac2Dirs) as this =
 
     let resolve (asmName : AssemblyName) =
         let checkDir dir =
             let path = Path.Combine(dir, asmName.name + ".dll")
             if File.Exists(path) then
-                let asm = Assembly(path)
+                let asm = Assembly(this, path)
                 if asmName.Matches(asm.Name) then
                     Some asm
                 else
@@ -157,9 +143,11 @@ type AssemblyResolver(sysLibPath, dirs, gac1Dirs, gac2Dirs) =
         }
         |> Seq.pick id
 
-    let sysLib = Assembly(sysLibPath)
+    let sysLib = Assembly(this, sysLibPath)
 
     let mutable loadedAsms = [ sysLib ]
+
+    member this.SystemLibrary = sysLib
 
     member this.LoadedAssemblies = loadedAsms
 
@@ -175,12 +163,131 @@ type AssemblyResolver(sysLibPath, dirs, gac1Dirs, gac2Dirs) =
         this.Load(AssemblyName.FromAssemblyRef(asmRef))
 
     member this.LoadFrom(path) =
-        match loadedAsms |> List.tryFind (fun asm -> asm.Path = path) with
+        match loadedAsms |> List.tryFind (fun asm -> asm.ManifestModule.Path = path) with
         | Some asm -> asm
         | None ->
-            let asm' = Assembly(path)
-            match loadedAsms |> List.tryFind (fun asm -> asm.Hash = asm'.Hash) with
+            let asm' = Assembly(this, path)
+            let h = asm'.ManifestModule.Hash
+            match loadedAsms |> List.tryFind (fun asm -> asm.ManifestModule.Hash = h) with
             | Some asm -> asm
             | None ->
                 loadedAsms <- asm' :: loadedAsms
                 asm'
+
+and Assembly internal (asmResolver : AssemblyResolver, path) as this =
+    let manifestModule = Module(this, path)
+    let manifest =
+        match manifestModule.AssemblyManifest with
+        | Some asm -> asm
+        | None -> failwith "Manifest missing."
+    let moduleMap =
+        let dir = Path.GetDirectoryName(path)
+        seq {
+            for name in manifestModule.ModuleRefs do
+                let path = Path.Combine(dir, name)
+                if File.Exists(path) then
+                    let pe = PEImageReader(path)
+                    if Option.isSome pe.CliHeader then
+                        yield name, Module(this, path)
+        }
+        |> Map.ofSeq
+
+    interface IComparable with
+        member this.CompareTo(other) =
+            if obj.ReferenceEquals(this, other) then
+                0
+            else
+                compare this.ManifestModule.Hash (other :?> Assembly).ManifestModule.Hash
+
+    override this.GetHashCode() =
+        hash this.ManifestModule.Hash
+
+    override this.Equals(other) =
+        obj.ReferenceEquals(this, other)
+
+    member this.AssemblyResolver = asmResolver
+    member this.ManifestModule : Module = manifestModule
+    member this.Name = AssemblyName.FromAssemblyManifest(manifest)
+    member this.Modules =
+        seq {
+            yield manifestModule
+            for _, m in Map.toSeq moduleMap -> m
+        }
+
+    member this.GetModule(name) = moduleMap.[name]
+
+and Module internal (asm, path) =
+    let m = ModuleLoading.loadModule path
+    let imageHash = Roma.Cli.PEImageReader(path).StrongNameHash
+    let typeMap =
+        seq {
+            for typeDef in m.typeDefs ->
+                (typeDef.typeNamespace, typeDef.typeName), typeDef
+        }
+        |> Map.ofSeq
+    let exportedTypeMap =
+        seq {
+            for et in m.exportedTypes ->
+                (et.typeNamespace, et.typeName), et
+        }
+        |> Map.ofSeq
+
+    interface IComparable with
+        member this.CompareTo(other) =
+            if obj.ReferenceEquals(this, other) then
+                0
+            else
+                let otherMod = other :?> Module
+                match compare this.Assembly otherMod.Assembly with
+                | 0 -> compare this.Path otherMod.Path
+                | x -> x
+
+    override this.GetHashCode() =
+        hash [ asm.GetHashCode(); path.GetHashCode() ]
+
+    override this.Equals(other) =
+        obj.ReferenceEquals(this, other)
+
+    member this.Assembly = asm
+    member this.ScopeName = m.moduleName
+    member this.ModuleRefs = m.moduleRefs
+    member this.Path = path
+    member this.Hash = imageHash
+    member this.AssemblyManifest = m.assembly
+    member this.TypeMap = typeMap
+    member this.ExportedTypeMap = exportedTypeMap
+
+and Type =
+    | VoidType
+    | PrimitiveType of Roma.Compiler.PrimitiveTypeKind
+    | EnumType of Roma.Compiler.PrimitiveTypeKind * TypeRef
+    | CompositeType of CompositeTypeInfo
+    | ArrayType of Type * (int * int option) list option (* shape *)
+    | GCRefType of Type
+    | ByRefType of Type
+    | PointerType of Type
+    | VolatileModifier of Type
+    // TODO: pointer-to-function
+    // TODO: pinned, custom modifiers
+
+and CompositeTypeInfo =
+    {
+        typeRef : TypeRef
+        genArgs : Type list
+    }
+
+and TypeRef =
+    | TopLevelTypeRef of Module * string * string // owner module, type namespace, type name
+    | NestedTypeRef of TypeRef * string // enclosing type, type name
+
+type Method =
+    {
+        ownerType : CompositeTypeInfo
+        methodDef : MethodDef
+    }
+
+type Field =
+    {
+        ownerType : CompositeTypeInfo
+        fieldDef : FieldDef
+    }

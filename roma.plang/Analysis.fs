@@ -361,7 +361,7 @@ let private maxUInt64 = bigint(System.UInt64.MaxValue)
 
 let internal strToConstant (s : string) =
     // TODO: report error
-    match System.Numerics.BigInteger.TryParse(s, System.Globalization.NumberStyles.None, System.Globalization.NumberFormatInfo.InvariantInfo) with
+    match System.Numerics.BigInteger.TryParse(s) with
     | true, value ->
         match value with
         | value when value >= minSInt32 && value <= maxSInt32 ->

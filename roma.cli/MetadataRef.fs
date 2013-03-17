@@ -17,9 +17,9 @@ type CallConv = {
 }
 
 type TypeResolutionScope =
-    | TypeRefScope of TypeSpec
+    | TypeRefScope of TypeRef
     | ModuleRefScope of string
-    | AssemblyRefScope of AssemblyRefRow
+    | AssemblyRefScope of AssemblyRef
 
 and TypeRef = {
     scope : TypeResolutionScope option
@@ -70,10 +70,25 @@ and MethodSig = {
     genParamCount : int
 }
 
-type MethodRef = {
+and MethodRef = {
     typeRef : TypeSpec option
     methodName : string
     signature : MethodSig
+}
+
+and AssemblyRef = {
+    version : Version
+    flags : AssemblyFlags
+    publicKeyOrToken : byte[]
+    name : string
+    culture : string
+    hashValue : byte[]
+    customAttrs : CustomAttribute list
+}
+
+and CustomAttribute = {
+    methodRef : MethodRef
+    value : byte[]
 }
 
 type MethodSpec = {

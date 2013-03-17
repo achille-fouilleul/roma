@@ -468,19 +468,19 @@ let rec private dumpType (w : Writer) resolveTypeRef (typeDef : TypeDef) (nestin
         // TODO: warn if not standard-compliant
         w.Print(String.concat " " header + ";")
 
-let private findAssembly assemblyRef refs =
+let private findAssembly (assemblyRef : AssemblyRef) refs =
     try
         let _, m =
             refs
             |> Seq.find (
                 fun (path, m) ->
                     match m.assembly with
-                    | Some a when a.name = assemblyRef.Name -> true // TODO: better check
+                    | Some a when a.name = assemblyRef.name -> true // TODO: better check
                     | _ -> false
             )
         m
     with :? Collections.Generic.KeyNotFoundException ->
-        failwithf "Could not resolve assembly '%s'" assemblyRef.Name
+        failwithf "Could not resolve assembly '%s'" assemblyRef.name
 
 let private findTypeDef (m : Module) (typeRef : TypeRef) =
     // TODO: performance: use a Map
@@ -506,7 +506,7 @@ let dump refs (m : Module) =
         // TODO: performance: use Maps
         match typeRef.scope with
         | None -> findTypeDef m typeRef
-        | Some(TypeRefScope(TypeSpec.Choice1Of2 enclosingTypeRef)) ->
+        | Some(TypeRefScope enclosingTypeRef) ->
             let enclosingTypeDef = resolveTypeRef enclosingTypeRef
             enclosingTypeDef.nestedTypes
             |> Seq.find (fun typeDef -> typeDef.typeName = typeRef.typeName) // TODO: error handling

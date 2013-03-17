@@ -100,7 +100,7 @@ let private enumerate i0 xs =
             iRef := i + 1u
     }
 
-type private ModuleLoader(pe : PEImageReader) =
+type private ModuleLoader(pe : PEImageReader) as this =
     let entryPointToken = Tables.tokenOptOfValue (Option.get pe.CliHeader).entryPointToken
     let md = MetadataReader(pe)
 
@@ -162,6 +162,19 @@ type private ModuleLoader(pe : PEImageReader) =
         |> Map.ofSeq
 
     let mutable methodRefMap = Map.empty
+
+    let loadAssemblyRef index =
+        let row = assemblyRefTable.[int index - 1]
+        let asmRef : AssemblyRef = {
+            version = row.MajorVersion, row.MinorVersion, row.BuildNumber, row.RevisionNumber
+            flags = row.Flags
+            publicKeyOrToken = row.PublicKeyOrToken
+            name = row.Name
+            culture = row.Culture
+            hashValue = row.HashValue
+            customAttrs = this.LoadCustomAttributes((TableNumber.AssemblyRef, index))
+        }
+        asmRef
 
     member this.LoadModuleTable() =
         match moduleTable with
@@ -228,7 +241,7 @@ type private ModuleLoader(pe : PEImageReader) =
                     typeNamespace = row.TypeNamespace
                     typeName = row.TypeName
                 }
-            Some(TypeSpec.Choice1Of2 typeRef)
+            Some typeRef
         else
             None
 
@@ -237,7 +250,7 @@ type private ModuleLoader(pe : PEImageReader) =
         let owner = this.LoadTypeRefOptFromTypeDefIndex(ownerIdx)
         let methodDefRow = methodDefTable.[int index - 1]
         let methodRef : MethodRef = {
-            typeRef = owner
+            typeRef = Option.map TypeSpec.Choice1Of2 owner
             methodName = methodDefRow.Name
             signature = decodeMethodSig this methodDefRow.Signature (ref 0)
         }
@@ -268,7 +281,7 @@ type private ModuleLoader(pe : PEImageReader) =
                     failwith "invalid module index"
                 None
             | Some(TableNumber.AssemblyRef, idx) ->
-                Some(AssemblyRefScope(assemblyRefTable.[int idx - 1]))
+                Some(AssemblyRefScope(loadAssemblyRef idx))
             | _ -> failwith "invalid ResolutionScope token"
         let typeRef : TypeRef =
             {
@@ -276,7 +289,7 @@ type private ModuleLoader(pe : PEImageReader) =
                 typeNamespace = row.TypeNamespace
                 typeName = row.TypeName
             }
-        TypeSpec.Choice1Of2 typeRef
+        typeRef
 
     member this.LoadTypeRefFromTypeSpecIndex(index) =
         let row = typeSpecTable.[int index - 1]
@@ -527,9 +540,12 @@ type private ModuleLoader(pe : PEImageReader) =
     member this.LoadTypeRef(token) =
         // TODO: memoize
         match token with
-        | (TableNumber.TypeDef, index) -> this.LoadTypeRefFromTypeDefIndex(index)
-        | (TableNumber.TypeRef, index) -> this.LoadTypeRefFromIndex(index)
-        | (TableNumber.TypeSpec, index) -> this.LoadTypeRefFromTypeSpecIndex(index)
+        | (TableNumber.TypeDef, index) ->
+            TypeSpec.Choice1Of2(this.LoadTypeRefFromTypeDefIndex(index))
+        | (TableNumber.TypeRef, index) ->
+            TypeSpec.Choice1Of2(this.LoadTypeRefFromIndex(index))
+        | (TableNumber.TypeSpec, index) ->
+            this.LoadTypeRefFromTypeSpecIndex(index)
         | _ -> failwith "invalid TypeRef token"
 
     member this.LoadMethodRef(token) =
@@ -565,14 +581,17 @@ type private ModuleLoader(pe : PEImageReader) =
         let row = memberRefTable.[int index - 1]
         let owner =
             match CodedIndexes.memberRefParent.Decode(row.Class) with
-            | (TableNumber.TypeRef, idx) -> Some(this.LoadTypeRefFromIndex(idx))
-            | (TableNumber.ModuleRef, idx) -> raise(new System.NotImplementedException())
+            | (TableNumber.TypeRef, idx) ->
+                Some(TypeSpec.Choice1Of2(this.LoadTypeRefFromIndex(idx)))
+            | (TableNumber.ModuleRef, idx) ->
+                raise(new System.NotImplementedException())
             | (TableNumber.MethodDef, idx) ->
                 // vararg
                 let owner, name, signature = this.LoadMethodDefFromIndex(idx)
                 // TODO: check name & signature compatibility
                 owner
-            | (TableNumber.TypeSpec, idx) -> Some(this.LoadTypeRefFromTypeSpecIndex(idx))
+            | (TableNumber.TypeSpec, idx) ->
+                Some(this.LoadTypeRefFromTypeSpecIndex(idx))
             | _ -> failwith "invalid MemberRef.Class token"
         match row.Signature.[0] with
         | 0x06uy ->
@@ -592,7 +611,9 @@ type private ModuleLoader(pe : PEImageReader) =
 
     member this.LoadMethodDefFromIndex(index) =
         let ownerIdx = getParent typeDefTable methodDefTable (fun row -> row.MethodList) index
-        let owner = this.LoadTypeRefOptFromTypeDefIndex(ownerIdx)
+        let owner =
+            this.LoadTypeRefOptFromTypeDefIndex(ownerIdx)
+            |> Option.map (TypeSpec.Choice1Of2)
         let methodDefRow = methodDefTable.[int index - 1]
         (owner, methodDefRow.Name, methodDefRow.Signature)
 
@@ -604,7 +625,7 @@ type private ModuleLoader(pe : PEImageReader) =
             let row = fieldTable.[int index - 1]
             let owner = this.LoadTypeRefOptFromTypeDefIndex(typeDefIndex)
             let fieldRef : FieldRef = {
-                typeRef = owner
+                typeRef = Option.map TypeSpec.Choice1Of2 owner
                 fieldName = row.Name
                 signature = decodeFieldSig this row.Signature
             }
@@ -623,7 +644,8 @@ type private ModuleLoader(pe : PEImageReader) =
                     match CodedIndexes.implementation.DecodeOpt(row.Implementation) with
                     | None -> None
                     | Some(TableNumber.File, i) -> Some(Implementation_File fileTable.[int i - 1].Name)
-                    | Some(TableNumber.AssemblyRef, i) -> Some(Implementation_AssemblyRef assemblyRefTable.[int i - 1])
+                    | Some(TableNumber.AssemblyRef, i) ->
+                        Some(Implementation_AssemblyRef(loadAssemblyRef i))
                     | _ -> failwith "invalid ManifestResource.Implementation"
                 let mresource : ManifestResource = {
                     name = row.Name
@@ -638,16 +660,7 @@ type private ModuleLoader(pe : PEImageReader) =
     member this.LoadAssemblyRefTable() =
         [
             for index, row in enumerate 1u assemblyRefTable ->
-                let asmRef : AssemblyRef = {
-                    version = row.MajorVersion, row.MinorVersion, row.BuildNumber, row.RevisionNumber
-                    flags = row.Flags
-                    publicKeyOrToken = row.PublicKeyOrToken
-                    name = row.Name
-                    culture = row.Culture
-                    hashValue = row.HashValue
-                    customAttrs = this.LoadCustomAttributes((TableNumber.AssemblyRef, index))
-                }
-                asmRef
+                loadAssemblyRef index
         ]
 
     member this.LoadFileTable() =
@@ -698,7 +711,7 @@ type private ModuleLoader(pe : PEImageReader) =
                 match CodedIndexes.implementation.Decode(row.Implementation) with
                 | (TableNumber.File, i) -> Implementation_File fileTable.[int i - 1].Name
                 | (TableNumber.ExportedType, i) -> Implementation_ExportedType(loadExportedType(int i - 1))
-                | (TableNumber.AssemblyRef, i) -> Implementation_AssemblyRef(assemblyRefTable.[int i - 1])
+                | (TableNumber.AssemblyRef, i) -> Implementation_AssemblyRef(loadAssemblyRef i)
                 | _ -> failwith "invalid Implementation token"
             let exportedType : ExportedType =
                 {
