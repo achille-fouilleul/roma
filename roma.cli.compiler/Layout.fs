@@ -11,9 +11,14 @@ type TypeLayout =
         alignment : uint32
     }
 
+type FieldId =
+    | VtablePtr
+    | SyncBlock
+    | UserField of FieldDef
+
 type FieldLayout =
     {
-        field : FieldDef
+        field : FieldId
         offset : uint32
     }
 
@@ -62,7 +67,7 @@ type TypeLayoutManager(addrSize : AddrSize) =
 
     member this.GetTypeLayout(t : Type) =
         match t with
-        | VoidType -> invalidArg "t" "Cannot return layout of void type."
+        | VoidType -> invalidArg "t" "Cannot compute layout of void type."
         | PrimitiveType kind
         | EnumType(kind, _) ->
             let size = primTypeSize kind
@@ -83,31 +88,46 @@ type TypeLayoutManager(addrSize : AddrSize) =
         | None ->
             // TODO: value/reference overlap invalid
             // TODO: exact reference/reference overlap unverifiable
-            let typeDef = info.TypeDef
-            let baseLayout =
-                info.BaseType
-                |> Option.map this.GetCompositeTypeLayout
-            let fieldTypes =
-                [
-                    for field in info.Fields do
-                        if not field.IsStatic then
-                            yield field, field.FieldType
-                ]
-            let baseSize = match baseLayout with | Some l -> l.size | None -> 0u
-            let minSize = match typeDef.classSize with | Some s -> uint32 s | None -> 0u
+            let typeRef = info.typeRef
+            let typeDef = typeRef.TypeDef
+            if typeDef.IsInterface then
+                failwith "Cannot compute layout of this type."
 
-            let layout =
+            let addLayout layout =
+                printfn "%A size: %u align: %u" info layout.size layout.alignment
+                for f in layout.fields do
+                    let name =
+                        match f.field with
+                        | FieldId.VtablePtr -> "vtablePtr"
+                        | FieldId.SyncBlock -> "syncBlock"
+                        | FieldId.UserField fld -> fld.name
+                    printfn " [%u] %s" f.offset name
+                typeLayoutMap <- Map.add info layout typeLayoutMap
+                layout
+
+            let compute baseLayout =
+                let fieldTypes =
+                    [
+                        for field in info.Fields do
+                            if not field.IsStatic then
+                                yield field, field.FieldType
+                    ]
+                let baseSize = match baseLayout with | Some l -> l.size | None -> 0u
+                let minSize = match typeDef.classSize with | Some s -> uint32 s | None -> 0u
+
                 match info with
-                | _ when info.IsExplicitLayout ->
+                | _ when typeDef.IsExplicitLayout ->
                     if baseSize <> 0u then
                         failwith "Explicit-layout type cannot have a base type."
                     let fields =
                         [
                             for field, fieldType in fieldTypes ->
-                                {
-                                    FieldLayout.field = field.fieldDef
-                                    FieldLayout.offset = Option.get field.fieldDef.offset
-                                }
+                                let layout : FieldLayout =
+                                    {
+                                        field = FieldId.UserField field.fieldDef
+                                        offset = Option.get field.fieldDef.offset
+                                    }
+                                layout
                         ]
                     let fieldLayouts = [ for _, t in fieldTypes -> this.GetTypeLayout(t) ]
                     let maxAlign = seq { for l in fieldLayouts -> l.alignment } |> Seq.fold max 1u
@@ -123,11 +143,11 @@ type TypeLayoutManager(addrSize : AddrSize) =
                             baseType = baseLayout
                             fields = fields
                         }
-                    layout
+                    addLayout layout
                 | _ ->
                     let mkLayout fieldTypes =
                         let offset = ref baseSize
-                        let maxAlign = ref 1u
+                        let maxAlign = ref(match baseLayout with | Some l -> l.alignment | None -> 1u)
                         let fields =
                             [
                                 for field, fieldType in fieldTypes do
@@ -139,7 +159,7 @@ type TypeLayoutManager(addrSize : AddrSize) =
                                     offset := align fieldAlignment !offset
                                     let layout : FieldLayout =
                                         {
-                                            field = field.fieldDef
+                                            field = UserField field.fieldDef
                                             offset = !offset
                                         }
                                     offset := !offset + fieldLayout.size
@@ -154,17 +174,47 @@ type TypeLayoutManager(addrSize : AddrSize) =
                                 baseType = baseLayout
                                 fields = fields
                             }
-                        layout
+                        addLayout layout
 
-                    if info.IsSequentialLayout then
+                    if typeDef.IsSequentialLayout then
                         mkLayout fieldTypes
                     else
                         fieldTypes
                         |> List.sortBy (fun (field, fieldType) -> this.GetTypeLayout(fieldType).size)
                         |> List.rev
                         |> mkLayout
-            printfn "%A size: %u align: %u" info layout.size layout.alignment
-            for f in layout.fields do
-                printfn " [%u] %s" f.offset f.field.name
-            typeLayoutMap <- Map.add info layout typeLayoutMap
-            layout
+
+            let baseTypeOpt = info.BaseType
+            match baseTypeOpt with
+            | Some baseType ->
+                match baseType.typeRef with
+                | SysTypeRef("System", "Enum") ->
+                    failwith "Cannot compute layout of enum type."
+                | SysTypeRef("System", "ValueType") when not(isSysType("System", "Enum") typeRef) ->
+                    compute None
+                | _ ->
+                    baseTypeOpt
+                    |> Option.map this.GetCompositeTypeLayout
+                    |> compute
+            | None ->
+                match typeRef with
+                | SysTypeRef("System", "Object") ->
+                    let vtable : FieldLayout =
+                        {
+                            field = VtablePtr
+                            offset = 0u
+                        }
+                    let syncBlock : FieldLayout =
+                        {
+                            field = SyncBlock
+                            offset = ptrSize
+                        }
+                    let layout : CompositeTypeLayout =
+                        {
+                            size = 2u * ptrSize
+                            alignment = ptrSize
+                            baseType = None
+                            fields = [ vtable; syncBlock ]
+                        }
+                    addLayout layout
+                | _ -> failwith "Base type required."

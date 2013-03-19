@@ -44,6 +44,16 @@ let rec private toTypeDef (typeRef : TypeRef) : TypeDef =
 let private isSysLib (m : Module) =
     m = getSysLib m
 
+let isSysType fqn typeRef =
+    match typeRef with
+    | TopLevelTypeRef(m, ns, name) when (ns, name) = fqn && isSysLib m -> true
+    | _ -> false
+
+let (|SysTypeRef|_|) typeRef =
+    match typeRef with
+    | TopLevelTypeRef(m, ns, name) when isSysLib m -> Some(ns, name)
+    | _ -> None
+
 let private (|IsPrimitive|_|) typeRef =
     match typeRef with
     | TopLevelTypeRef(m, "System", name) when isSysLib m ->
@@ -108,41 +118,44 @@ let private primSigKindMap =
     ]
     |> Map.ofSeq
 
-let private (|IsEnum|_|) typeRef =
+let private isEnumTypeRef (typeRef : TypeRef) =
     let typeDef = toTypeDef typeRef
     match typeDef.baseType with
     | Some(Choice1Of2 typeRef') when (typeRef'.typeNamespace, typeRef'.typeName) = ("System", "Enum") ->
-        match translateToTypeRef (getModule typeRef) typeRef' with
-        | TopLevelTypeRef(m, "System", "Enum") when isSysLib m ->
-            let fld =
-                typeDef.fields
-                |> Seq.find (fun fld -> (fld.flags &&& FieldAttributes.Static) <> FieldAttributes.Static)
-            let kindOpt = Map.tryFind fld.typeSig primSigKindMap
-            if Option.isNone kindOpt then
-                failwith "Invalid underlying type."
-            kindOpt
-        | _ -> None
-    | _ -> None
+        translateToTypeRef (getModule typeRef) typeRef'
+        |> isSysType("System", "Enum")
+    | _ -> false
+
+let private isValueTypeRef (typeRef : TypeRef) =
+    match typeRef with
+    | SysTypeRef("System", "Enum") -> false
+    | _ ->
+        let typeDef = toTypeDef typeRef
+        match typeDef.baseType with
+        | Some(Choice1Of2 baseTypeRef) ->
+            translateToTypeRef (getModule typeRef) baseTypeRef
+            |> isSysType("System", "ValueType")
+        | _ -> false
+
+let private (|IsEnum|_|) typeRef =
+    if isEnumTypeRef typeRef then
+        let typeDef = toTypeDef typeRef
+        let fld =
+            typeDef.fields
+            |> Seq.find (fun fld -> (fld.flags &&& FieldAttributes.Static) <> FieldAttributes.Static)
+        let kindOpt = Map.tryFind fld.typeSig primSigKindMap
+        if Option.isNone kindOpt then
+            failwith "Invalid underlying type."
+        kindOpt
+    else
+        None
 
 type CompositeTypeInfo with
     member this.Module = getModule this.typeRef
-
-    member this.TypeDef =
-        toTypeDef this.typeRef
+    member this.TypeDef = toTypeDef this.typeRef
 
     member this.Namespace = this.TypeDef.typeNamespace
     member this.Name = this.TypeDef.typeName
-
-    member this.NestedTypes =
-        seq {
-            for nestedTypeDef in this.TypeDef.nestedTypes ->
-                let info : CompositeTypeInfo =
-                    {
-                        typeRef = NestedTypeRef(this.typeRef, nestedTypeDef.typeName)
-                        genArgs = [] // TODO?
-                    }
-                info
-        }
 
     member this.Methods =
         seq {
@@ -162,32 +175,11 @@ type CompositeTypeInfo with
                 }
         }
 
-    member this.IsGeneric =
-        not(Array.isEmpty this.TypeDef.genericParams)
-
-    member this.IsExplicitLayout =
-        (this.TypeDef.flags &&& TypeAttributes.LayoutMask) = TypeAttributes.ExplicitLayout
-
-    member this.IsSequentialLayout =
-        (this.TypeDef.flags &&& TypeAttributes.LayoutMask) = TypeAttributes.SequentialLayout
-
     member private this.SysType(ns, name) : CompositeTypeInfo =
         {
             typeRef = TopLevelTypeRef(getSysLib this.Module, ns, name)
             genArgs = []
         }
-
-    member this.IsEnum =
-        this.BaseType = Some(this.SysType("System", "Enum"))
-
-    member this.IsValueType =
-        match this.BaseType with
-        | None -> false
-        | Some baseType ->
-            if baseType = this.SysType("System", "ValueType") then
-                this <> this.SysType("System", "Enum")
-            else
-                this.IsEnum
 
     member this.BaseType : CompositeTypeInfo option =
         this.TypeDef.baseType
@@ -211,16 +203,34 @@ type CompositeTypeInfo with
             | _ -> failwith "Invalid TypeSpec."
         )
 
+and TypeRef with
+    member this.TypeDef =
+        toTypeDef this
+
+    member this.NestedTypes =
+        seq {
+            for nestedTypeDef in this.TypeDef.nestedTypes ->
+                NestedTypeRef(this, nestedTypeDef.typeName)
+        }
+
+and TypeDef with
+    member this.IsGeneric =
+        not(Array.isEmpty this.genericParams)
+
+    member this.IsExplicitLayout =
+        (this.flags &&& TypeAttributes.LayoutMask) = TypeAttributes.ExplicitLayout
+
+    member this.IsSequentialLayout =
+        (this.flags &&& TypeAttributes.LayoutMask) = TypeAttributes.SequentialLayout
+
+    member this.IsInterface =
+        (this.flags &&& TypeAttributes.ClassSemanticsMask) = TypeAttributes.Interface
+
 and Module with
     member this.Types =
         seq {
             for _, t in Map.toSeq this.TypeMap ->
-                let info : CompositeTypeInfo =
-                    {
-                        typeRef = TopLevelTypeRef(this, t.typeNamespace, t.typeName)
-                        genArgs = []
-                    }
-                info
+                TopLevelTypeRef(this, t.typeNamespace, t.typeName)
         }
 
     member this.TranslateToType(typeSig : TypeSig, genArgs) =
@@ -274,7 +284,7 @@ and Module with
         | ModReq(modType, typeSig) ->
             let modRef = translateToTypeRef this modType
             match modRef with
-            | TopLevelTypeRef(m, "System.Runtime.CompilerServices", "IsVolatile") when isSysLib m ->
+            | SysTypeRef("System.Runtime.CompilerServices", "IsVolatile") ->
                 VolatileModifier(this.TranslateToType(typeSig, genArgs))
             | _ -> failwith "Invalid modreq."
         | ModOpt _ -> raise(NotImplementedException()) // TODO
@@ -308,6 +318,8 @@ and Module with
             }
         CompositeType(info)
 
+    member this.IsSysLib = isSysLib this
+
 type Method with
     member private this.TranslateType(typeSig) =
         let m = this.ownerType.Module
@@ -318,6 +330,12 @@ type Method with
 
     member this.ReturnType =
         this.TranslateType(this.methodDef.signature.retType)
+
+    member this.ParamTypes =
+        [|
+            for typeSig in this.methodDef.signature.paramTypes ->
+                this.TranslateType(typeSig)
+        |]
 
 type Field with
     member private this.TranslateType(typeSig) =
