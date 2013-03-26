@@ -6,6 +6,14 @@ open System
 open Roma.Cli
 open Roma.Cli.Compiler
 
+let mkTypeInfo typeRef genArgs =
+    let info : CompositeTypeInfo =
+        {
+            typeRef = typeRef
+            genArgs = genArgs
+        }
+    info
+
 let rec private getModule typeRef =
     match typeRef with
     | TopLevelTypeRef(m, _, _) -> m
@@ -137,12 +145,16 @@ let private isValueTypeRef (typeRef : TypeRef) =
             |> isSysType("System", "ValueType")
         | _ -> false
 
-let private (|IsEnum|_|) typeRef =
+type FieldDef with
+    member this.IsStatic =
+        (this.flags &&& FieldAttributes.Static) = FieldAttributes.Static
+
+let (|IsEnum|_|) typeRef =
     if isEnumTypeRef typeRef then
         let typeDef = toTypeDef typeRef
         let fld =
             typeDef.fields
-            |> Seq.find (fun fld -> (fld.flags &&& FieldAttributes.Static) <> FieldAttributes.Static)
+            |> Seq.find (fun fld -> not fld.IsStatic)
         let kindOpt = Map.tryFind fld.typeSig primSigKindMap
         if Option.isNone kindOpt then
             failwith "Invalid underlying type."
@@ -185,27 +197,22 @@ type CompositeTypeInfo with
         this.TypeDef.baseType
         |> Option.map (
             function
-            | Choice1Of2 typeRef ->
-                let info : CompositeTypeInfo =
-                    {
-                        typeRef = translateToTypeRef this.Module typeRef
-                        genArgs = []
-                    }
-                info
+            | Choice1Of2 typeRef -> mkTypeInfo (translateToTypeRef this.Module typeRef) []
             | Choice2Of2(GenericInst(TypeSig.Class typeRef, genArgs))
             | Choice2Of2(GenericInst(TypeSig.ValueType typeRef, genArgs)) ->
-                let info : CompositeTypeInfo =
-                    {
-                        typeRef = translateToTypeRef this.Module typeRef
-                        genArgs = [ for t in genArgs -> this.Module.TranslateToType(t, (this.genArgs, [])) ]
-                    }
-                info
+                let typeRef' = translateToTypeRef this.Module typeRef
+                let genArgs' = [ for t in genArgs -> this.Module.TranslateToType(t, (this.genArgs, [])) ]
+                mkTypeInfo typeRef' genArgs'
             | _ -> failwith "Invalid TypeSpec."
         )
 
 and TypeRef with
     member this.TypeDef =
         toTypeDef this
+
+    member this.IsEnum = isEnumTypeRef this
+
+    member this.IsValueType = isValueTypeRef this
 
     member this.NestedTypes =
         seq {
@@ -249,7 +256,7 @@ and Module with
         | R8 -> PrimitiveType Roma.Compiler.PrimitiveTypeKind.Float64
         | I -> PrimitiveType Roma.Compiler.PrimitiveTypeKind.SIntPtr
         | U -> PrimitiveType Roma.Compiler.PrimitiveTypeKind.UIntPtr
-        | Array(elemType, shape) -> ArrayType(this.TranslateToType(elemType, genArgs), Some shape)
+        | Array(elemType, shape) -> ArrayType(this.TranslateToType(elemType, genArgs), shape)
         | ByRef typeSig -> ByRefType(this.TranslateToType(typeSig, genArgs))
         | Fnptr methodSig -> raise(NotImplementedException()) // TODO
         | GenericInst(genType, args) ->
@@ -259,12 +266,8 @@ and Module with
                         this.TranslateToType(arg, genArgs)
                 ]
             let k (typeRef : Roma.Cli.TypeRef) =
-                let info : CompositeTypeInfo =
-                    {
-                        typeRef = translateToTypeRef this typeRef
-                        genArgs = args'
-                    }
-                CompositeType info
+                mkTypeInfo (translateToTypeRef this typeRef) args'
+                |> CompositeType
             match genType with
             | TypeSig.Class typeRef -> GCRefType(k typeRef) // TODO: reference type check
             | TypeSig.ValueType typeRef -> k typeRef // TODO: value type check
@@ -275,7 +278,7 @@ and Module with
         | Object -> GCRefType(this.SysType("System", "String"))
         | Ptr typeSig -> PointerType(this.TranslateToType(typeSig, genArgs))
         | String -> GCRefType(this.SysType("System", "Object"))
-        | SZArray elemType -> ArrayType(this.TranslateToType(elemType, genArgs), None)
+        | SZArray elemType -> ArrayType(this.TranslateToType(elemType, genArgs), [])
         | TypedByRef -> this.SysType("System", "TypedReference")
         | Var n ->
             let typeArgs, _ = genArgs
@@ -291,32 +294,21 @@ and Module with
         | Pinned _ -> raise(NotImplementedException()) // TODO
         | TypeSig.Class typeRef ->
             // TODO: reference type check
-            let info : CompositeTypeInfo =
-                {
-                    typeRef = translateToTypeRef this typeRef
-                    genArgs = []
-                }
-            GCRefType(CompositeType info)
+            mkTypeInfo (translateToTypeRef this typeRef) []
+            |> CompositeType
+            |> GCRefType
         | TypeSig.ValueType typeRef ->
             // TODO: value type check
             match translateToTypeRef this typeRef with
             | IsPrimitive kind -> PrimitiveType kind
             | IsEnum kind as typeRef -> EnumType(kind, typeRef)
             | typeRef' ->
-                let info : CompositeTypeInfo =
-                    {
-                        typeRef = typeRef'
-                        genArgs = []
-                    }
-                CompositeType info
+                mkTypeInfo typeRef' []
+                |> CompositeType
 
     member private this.SysType(ns, name) =
-        let info : CompositeTypeInfo =
-            {
-                typeRef = TopLevelTypeRef(getSysLib this, ns, name)
-                genArgs = []
-            }
-        CompositeType(info)
+        mkTypeInfo (TopLevelTypeRef(getSysLib this, ns, name)) []
+        |> CompositeType
 
     member this.IsSysLib = isSysLib this
 

@@ -94,14 +94,6 @@ type TypeLayoutManager(addrSize : AddrSize) =
                 failwith "Cannot compute layout of this type."
 
             let addLayout layout =
-                printfn "%A size: %u align: %u" info layout.size layout.alignment
-                for f in layout.fields do
-                    let name =
-                        match f.field with
-                        | FieldId.VtablePtr -> "vtablePtr"
-                        | FieldId.SyncBlock -> "syncBlock"
-                        | FieldId.UserField fld -> fld.name
-                    printfn " [%u] %s" f.offset name
                 typeLayoutMap <- Map.add info layout typeLayoutMap
                 layout
 

@@ -31,7 +31,6 @@
     <DocumentationFile>bin\Release\roma.cli.compiler.XML</DocumentationFile>
   </PropertyGroup>
   <ItemGroup>
-    <Reference Include="mscorlib" />
     <Reference Include="System" />
     <Reference Include="System.Numerics" />
   </ItemGroup>
@@ -39,6 +38,7 @@
     <Compile Include="AssemblyResolution.fs" />
     <Compile Include="TypeSupport.fs" />
     <Compile Include="Layout.fs" />
+    <Compile Include="AssemblyCompilation.fs" />
     <None Include="Main.fs" />
     <None Include="clic.fsx" />
   </ItemGroup>

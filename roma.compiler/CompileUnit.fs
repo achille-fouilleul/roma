@@ -29,30 +29,36 @@ type PrimitiveTypeKind =
 
 [<AbstractClass>]
 type TypeEntry internal (tag) =
-    let node = DwNode(tag, [])
-
-    static member internal Attr typeEntryOpt =
-        seq {
-            for (typeEntry : TypeEntry) in Option.toArray typeEntryOpt do
-                yield DwAt.Type, DwValue.Ref typeEntry.Node
-        }
+    let node = DwNode(tag)
 
     member internal this.Node = node
 
     member this.SetByteSize(size : uint32) =
         node.AddAttr(DwAt.ByteSize, DwValue.Sdata(Int128 size))
 
+    static member internal TypeAttr(te : #TypeEntry) =
+        DwAt.Type, DwValue.Ref te.Node
+
+    static member internal TypeAttrOpt(typeEntryOpt) =
+        Option.toArray typeEntryOpt
+        |> Seq.map TypeEntry.TypeAttr
+
 and internal TypeContainer(node : DwNode) =
 
     let typeMap = MutableMap<string, TypeEntry>()
 
-    let add name (newType : #TypeEntry) =
-        node.AddChild(newType.Node)
-        typeMap.Add(name, newType)
-        newType
+    let add name (te : #TypeEntry) =
+        typeMap.Add(name, te)
+        node.AddChild(te.Node)
+        te
 
     member this.FindType(name) =
         typeMap.[name]
+
+    member this.TryFindType(name) =
+        match typeMap.TryGetValue(name) with
+        | true, te -> Some te
+        | _ -> None
 
     member this.CreateEnumType(name) =
         add name (EnumTypeEntry(name))
@@ -71,6 +77,7 @@ and internal TypeContainer(node : DwNode) =
 
 and ITypeContainer =
     abstract FindType : string -> TypeEntry
+    abstract TryFindType : string -> TypeEntry option
     abstract CreateEnumType : string -> EnumTypeEntry
     abstract CreateStructType : string -> StructTypeEntry
     abstract CreateClassType : string -> ClassTypeEntry
@@ -80,11 +87,12 @@ and ITypeContainer =
 and EnumTypeEntry internal (name) as this =
     inherit TypeEntry(DwTag.EnumerationType)
 
-    do this.Node.AddAttrs(
+    do
         [
             DwAt.Name, DwValue.String name
             DwAt.EnumClass, DwValue.Bool true
-        ])
+        ]
+        |> this.Node.AddAttrs
 
     member this.Name = name
 
@@ -92,17 +100,16 @@ and EnumTypeEntry internal (name) as this =
         this.Node.AddAttr(DwAt.ByteSize, DwValue.Udata(UInt128 size))
 
     member this.SetUnderlyingType(underlyingType : TypeEntry) =
-        this.Node.AddAttr(DwAt.Type, DwValue.Ref underlyingType.Node)
+        this.Node.AddAttr(TypeEntry.TypeAttr underlyingType)
 
     member this.AddValue(name, value) =
-        let child =
-            DwNode(
-                DwTag.Enumerator,
-                [
-                    DwAt.Name, DwValue.String name
-                    DwAt.ConstValue, DwValue.Sdata value
-                ])
-        this.Node.AddChild(child)
+        let node = DwNode(DwTag.Enumerator)
+        [
+            DwAt.Name, DwValue.String name
+            DwAt.ConstValue, DwValue.Sdata value
+        ]
+        |> node.AddAttrs
+        this.Node.AddChild(node)
 
 and StructTypeEntry internal (name) =
     inherit CompositeTypeBase(DwTag.StructureType, name)
@@ -121,11 +128,13 @@ and [<AbstractClass>] CompositeTypeBase internal (tag, name) as this =
     do this.Node.AddAttr(DwAt.Name, DwValue.String name)
 
     let typeContainer = TypeContainer(this.Node)
-    let members = MutableList<_>()
-    let subprograms = MutableList<_>()
+
+    let members = MutableList<Member>()
+    let subprograms = MutableList<Subprogram>()
 
     interface ITypeContainer with
         member this.FindType(name) = typeContainer.FindType(name)
+        member this.TryFindType(name) = typeContainer.TryFindType(name)
         member this.CreateEnumType(name) = typeContainer.CreateEnumType(name)
         member this.CreateStructType(name) = typeContainer.CreateStructType(name)
         member this.CreateClassType(name) = typeContainer.CreateClassType(name)
@@ -134,26 +143,24 @@ and [<AbstractClass>] CompositeTypeBase internal (tag, name) as this =
 
     member this.Name = name
 
-    member this.AddTypeParameter(name : string, paramType : TypeEntry) =
-        this.Node.AddChild(
-            DwNode(
-                DwTag.TemplateTypeParameter,
-                [
-                    DwAt.Name, DwValue.String name
-                    DwAt.Type, DwValue.Ref paramType.Node
-                ])
-        )
+    member this.AddTypeParameter(name, paramType : TypeEntry) =
+        let node = DwNode(DwTag.TemplateTypeParameter)
+        [
+            DwAt.Name, DwValue.String name
+            TypeEntry.TypeAttr paramType
+        ]
+        |> node.AddAttrs
+        this.Node.AddChild(node)
 
     member this.Inherit(baseType : TypeEntry) =
-        let child =
-            DwNode(
-                DwTag.Inheritance,
-                [
-                    DwAt.Type, DwValue.Ref baseType.Node
-                    // TODO: DwAt.DataMemberLocation
-                    // TODO: DwAt.Accessibility
-                ])
-        this.Node.AddChild(child)
+        let node = DwNode(DwTag.Inheritance)
+        [
+            TypeEntry.TypeAttr baseType
+            // TODO: DwAt.DataMemberLocation
+            // TODO: DwAt.Accessibility
+        ]
+        |> node.AddAttrs
+        this.Node.AddChild(node)
 
     member this.AddMember(name) =
         let mem = Member(name)
@@ -168,29 +175,34 @@ and [<AbstractClass>] CompositeTypeBase internal (tag, name) as this =
         sub
 
 and Member internal (name : string) =
-    let node = DwNode(DwTag.Member, [ DwAt.Name, DwValue.String name ])
-    // TODO: DwAt.DataMemberLocation
+    let node = DwNode(DwTag.Member)
+    do node.AddAttr(DwAt.Name, DwValue.String name)
 
     member this.Node = node
 
     member this.SetType(memberType : TypeEntry) =
-        node.AddAttr(DwAt.Type, DwValue.Ref memberType.Node)
+        node.AddAttr(TypeEntry.TypeAttr memberType)
+
+    member this.SetDataMemberLocation(offset : int) =
+        node.AddAttr(DwAt.DataMemberLocation, DwValue.Sdata(Int128 offset))
 
 and Subprogram internal (name : string) =
-    let node = DwNode(DwTag.Subprogram, [ DwAt.Name, DwValue.String name ])
+    let node = DwNode(DwTag.Subprogram)
+    do node.AddAttr(DwAt.Name, DwValue.String name)
 
     member this.Node = node
 
-    member this.SetReturnType(memberType : TypeEntry option) =
-        node.AddAttrs(TypeEntry.Attr memberType)
+    member this.SetReturnType(memberType) =
+        node.AddAttrs(TypeEntry.TypeAttrOpt memberType)
 
-    member this.AddParameter(paramType : TypeEntry, nameOpt : string option) =
+    member this.AddParameter(paramType, nameOpt : string option) =
         let param = FormalParameter(paramType, nameOpt)
         node.AddChild(param.Node)
         param
 
     member this.AddUnspecifiedParameters() =
-        node.AddChild(DwNode(DwTag.UnspecifiedParameters, []))
+        DwNode(DwTag.UnspecifiedParameters)
+        |> node.AddChild
 
     member this.SetObjectPointer(param : FormalParameter) =
         node.AddAttr(DwAt.ObjectPointer, DwValue.Ref param.Node)
@@ -198,15 +210,15 @@ and Subprogram internal (name : string) =
     member this.SetVirtual(isPure : bool) =
         node.AddAttr(DwAt.Virtuality, DwValue.Sdata(Int128(if isPure then 2 else 1)))
 
-and FormalParameter internal (paramType, nameOpt) =
-    let node =
-        DwNode(
-            DwTag.FormalParameter,
-            [
-                yield DwAt.Type, DwValue.Ref paramType.Node
-                for name in Option.toArray nameOpt do
-                    yield DwAt.Name, DwValue.String name
-            ])
+and FormalParameter internal (paramType : TypeEntry, nameOpt) =
+    let node = DwNode(DwTag.FormalParameter)
+    do
+        [
+            yield TypeEntry.TypeAttr paramType
+            for name in Option.toArray nameOpt do
+                yield DwAt.Name, DwValue.String name
+        ]
+        |> node.AddAttrs
 
     member this.Node = node
 
@@ -218,24 +230,26 @@ and TypedefEntry internal (name) as this =
 
     do this.Node.AddAttr(DwAt.Name, DwValue.String name)
 
-    let mutable referencedType = None
+    let mutable referencedType : TypeEntry option = None
 
     member this.ReferencedType
         with get() = referencedType
 
-        and set (typeOpt) = 
+        and set typeOpt = 
             referencedType <- typeOpt
-            this.Node.AddAttrs(TypeEntry.Attr typeOpt)
+            TypeEntry.TypeAttrOpt typeOpt
+            |> this.Node.AddAttrs
 
 type PrimitiveTypeEntry internal (kind, name, encoding : DwAte, byteSize : uint32) as this =
     inherit TypeEntry(DwTag.BaseType)
 
-    do this.Node.AddAttrs(
+    do
         [
             DwAt.Name, DwValue.String name
             DwAt.Encoding, DwValue.Udata(UInt128(uint32 encoding))
             DwAt.ByteSize, DwValue.Udata(UInt128 byteSize)
-        ])
+        ]
+        |> this.Node.AddAttrs
 
     member this.Kind = kind
 
@@ -260,100 +274,99 @@ type VolatileTypeEntry internal (modifiedType : TypeEntry) as this =
 type PointerTypeEntry internal (t, byteSize : uint32) as this =
     inherit TypeEntry(DwTag.PointerType)
 
-    do this.Node.AddAttrs(
+    do
         [
-            yield! TypeEntry.Attr t
+            yield! TypeEntry.TypeAttrOpt t
             yield DwAt.ByteSize, DwValue.Udata(UInt128 byteSize)
-        ])
+        ]
+        |> this.Node.AddAttrs
 
     member this.ReferencedType = t
 
 type ManagedPointerTypeEntry internal (t : TypeEntry, byteSize : uint32) as this =
     inherit TypeEntry(DwTag.PointerType)
 
-    do this.Node.AddAttrs(
+    do
         [
-            yield DwAt.Type, DwValue.Ref t.Node
+            yield TypeEntry.TypeAttr t
             yield DwAt.ByteSize, DwValue.Udata(UInt128 byteSize)
             yield DwAt.ClrManaged, DwValue.Bool true
-        ])
+        ]
+        |> this.Node.AddAttrs
 
     member this.ReferencedType = t
 
 type ReferenceTypeEntry internal (t, byteSize : uint32) as this =
     inherit TypeEntry(DwTag.ReferenceType)
 
-    do this.Node.AddAttrs(
+    do
         [
-            yield! TypeEntry.Attr t
+            yield! TypeEntry.TypeAttrOpt t
             yield DwAt.ByteSize, DwValue.Udata(UInt128 byteSize)
-        ])
+        ]
+        |> this.Node.AddAttrs
 
     member this.ReferencedType = t
 
-type ArrayTypeEntry internal (sizeType : TypeEntry, t, sizeOpt) as this =
+type ArrayTypeEntry internal (sizeType : TypeEntry, t : TypeEntry option, sizeOpt) as this =
     inherit TypeEntry(DwTag.ArrayType)
 
     do
-        this.Node.AddAttrs(TypeEntry.Attr t)
+        this.Node.AddAttrs(TypeEntry.TypeAttrOpt t)
         for size in Option.toArray sizeOpt do
             assert(size >= 1u)
-            let child =
-                DwNode(
-                    DwTag.SubrangeType,
-                    [
-                        DwAt.Type, DwValue.Ref sizeType.Node
-                        DwAt.UpperBound, DwValue.Udata(UInt128(size - 1u))
-                    ])
+            let child = DwNode(DwTag.SubrangeType)
+            [
+                yield TypeEntry.TypeAttr sizeType
+                yield DwAt.UpperBound, DwValue.Udata(UInt128(size - 1u))
+            ]
+            |> child.AddAttrs
             this.Node.AddChild(child)
 
 type ManagedArrayTypeEntry internal (sizeType : TypeEntry, elemType : TypeEntry, shapeOpt) as this =
     inherit TypeEntry(DwTag.ArrayType)
 
     do
-        this.Node.AddAttrs(
-            [
-                DwAt.ClrManaged, DwValue.Bool true
-                DwAt.Type, DwValue.Ref elemType.Node
-            ])
+        [
+            yield DwAt.ClrManaged, DwValue.Bool true
+            yield TypeEntry.TypeAttr elemType
+        ]
+        |> this.Node.AddAttrs
 
         for shape in Option.toArray shapeOpt do
             for (lo : int, sizeOpt : int option) in (shape : list<_>) do
-                this.Node.AddChild(
-                    DwNode(
-                        DwTag.SubrangeType,
-                        [
-                            yield DwAt.LowerBound, DwValue.Sdata(Int128 lo)
-                            yield! seq { for size in Option.toArray sizeOpt -> DwAt.UpperBound, DwValue.Sdata(Int128(lo + size)) }
-                        ]))
+                let node = DwNode(DwTag.SubrangeType)
+                [
+                    yield DwAt.LowerBound, DwValue.Sdata(Int128 lo)
+                    yield! seq { for size in Option.toArray sizeOpt -> DwAt.UpperBound, DwValue.Sdata(Int128(lo + size)) }
+                ]
+                |> node.AddAttrs
+                this.Node.AddChild(node)
 
     member this.ElementType = elemType
 
-type SubroutineTypeEntry internal (retType, paramTypes) as this =
+type SubroutineTypeEntry internal (retType : TypeEntry option, paramTypes : TypeEntry option seq) as this =
     inherit TypeEntry(DwTag.SubroutineType)
 
     do
-        this.Node.AddAttrs(
-            [
-                yield DwAt.Prototyped, DwValue.Bool true
-                yield! TypeEntry.Attr retType
-            ])
+        [
+            yield DwAt.Prototyped, DwValue.Bool true
+            yield! TypeEntry.TypeAttrOpt retType
+        ]
+        |> this.Node.AddAttrs
         for paramType in paramTypes do
-            let child =
-                DwNode(
-                    DwTag.FormalParameter,
-                    [
-                        yield! TypeEntry.Attr paramType
-                    ])
+            let child = DwNode(DwTag.FormalParameter)
+            child.AddAttrs(TypeEntry.TypeAttrOpt paramType)
             this.Node.AddChild(child)
 
 type Variable internal (name : string) =
-    let node = DwNode(DwTag.Variable, [ DwAt.Name, DwValue.String name ])
+    let node = DwNode(DwTag.Variable)
+    do node.AddAttr(DwAt.Name, DwValue.String name)
 
     member this.Node = node
 
     member this.SetType(variableType : TypeEntry) =
-        node.AddAttr(DwAt.Type, DwValue.Ref variableType.Node)
+        node.AddAttr(TypeEntry.TypeAttr variableType)
 
 type INamespace =
     inherit ITypeContainer
@@ -366,6 +379,7 @@ type internal Namespace(node : DwNode) =
     interface INamespace with
         member this.GetNamespace(name) = this.GetNamespace(name) :> INamespace
         member this.FindType(name) = typeContainer.FindType(name)
+        member this.TryFindType(name) = typeContainer.TryFindType(name)
         member this.CreateEnumType(name) = typeContainer.CreateEnumType(name)
         member this.CreateStructType(name) = typeContainer.CreateStructType(name)
         member this.CreateClassType(name) = typeContainer.CreateClassType(name)
@@ -376,19 +390,22 @@ type internal Namespace(node : DwNode) =
         match nsMap.TryGetValue(name) with
         | true, ns -> ns
         | _ ->
-            let child = DwNode(DwTag.Namespace, [ DwAt.Name, DwValue.String name ])
-            node.AddChild(child)
+            let child = DwNode(DwTag.Namespace)
+            child.AddAttr(DwAt.Name, DwValue.String name)
             let ns = Namespace(child)
             nsMap.Add(name, ns)
+            node.AddChild(child)
             ns
 
 type Module internal (name) =
-    let node = DwNode(DwTag.Module, [ DwAt.Name, DwValue.String name ])
+    let node = DwNode(DwTag.Module)
+    do node.AddAttr(DwAt.Name, DwValue.String name)
     let ns = Namespace(node) :> INamespace
 
     interface INamespace with
         member this.GetNamespace(name) = ns.GetNamespace(name)
         member this.FindType(name) = ns.FindType(name)
+        member this.TryFindType(name) = ns.TryFindType(name)
         member this.CreateEnumType(args) = ns.CreateEnumType(args)
         member this.CreateStructType(name) = ns.CreateStructType(name)
         member this.CreateClassType(name) = ns.CreateClassType(name)
@@ -397,15 +414,18 @@ type Module internal (name) =
 
     member internal this.Node = node
 
+    member this.Name = name
+
 type UnitBase(tag, addrSize : AddrSize) =
     let ptrSize =
         match addrSize with
         | Addr32 -> 4u
         | Addr64 -> 8u
 
-    let node = DwNode(tag, [ DwAt.UseUTF8, DwValue.Bool true ])
+    let node = DwNode(tag)
+    do node.AddAttr(DwAt.UseUTF8, DwValue.Bool true)
     let ns = Namespace(node) :> INamespace
-    let modules = MutableList<_>()
+    let modules = MutableMap<_, _>()
     let variables = MutableList<_>()
     let subprograms = MutableList<_>()
     let primTypeMap = MutableMap<_, _>()
@@ -462,8 +482,8 @@ type UnitBase(tag, addrSize : AddrSize) =
         | true, value -> value
         | _ ->
             let value : #TypeEntry = f key
-            node.AddChild(value.Node)
             map.Add(key, value)
+            node.AddChild(value.Node)
             value
 
     let memoizeOpt ((map : MutableMap<_, _>), voidRef) f keyOpt =
@@ -482,13 +502,14 @@ type UnitBase(tag, addrSize : AddrSize) =
             | true, value -> value
             | _ ->
                 let value : #TypeEntry = f keyOpt
-                node.AddChild(value.Node)
                 map.Add(key, value)
+                node.AddChild(value.Node)
                 value
 
     interface INamespace with
         member this.GetNamespace(name) = ns.GetNamespace(name)
         member this.FindType(name) = ns.FindType(name)
+        member this.TryFindType(name) = ns.TryFindType(name)
         member this.CreateEnumType(args) = ns.CreateEnumType(args)
         member this.CreateStructType(name) = ns.CreateStructType(name)
         member this.CreateClassType(name) = ns.CreateClassType(name)
@@ -534,11 +555,14 @@ type UnitBase(tag, addrSize : AddrSize) =
         node.AddChild(sub.Node)
         sub
 
-    member this.AddModule(name) =
-        let m = Module(name)
-        modules.Add(m)
-        node.AddChild(m.Node)
-        m
+    member this.GetModule(name) =
+        match modules.TryGetValue(name) with
+        | true, m -> m
+        | _ ->
+            let m = Module(name)
+            modules.Add(name, m)
+            node.AddChild(m.Node)
+            m
 
     member internal this.Node = node
 

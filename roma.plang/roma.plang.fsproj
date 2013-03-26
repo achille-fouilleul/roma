@@ -39,9 +39,7 @@
     <Compile Include="CodeGen.fs" />
   </ItemGroup>
   <ItemGroup>
-    <Reference Include="mscorlib" />
     <Reference Include="System" />
-    <Reference Include="System.Core" />
     <Reference Include="System.Numerics" />
     <ProjectReference Include="..\roma.compiler\roma.compiler.fsproj">
       <Name>roma.compiler</Name>

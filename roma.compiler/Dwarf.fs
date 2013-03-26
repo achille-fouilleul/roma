@@ -213,69 +213,58 @@ type DwAbbrev =
         attrs : (DwAt * DwForm) list
     }
 
+let mapOfDict (dict : MutableMap<'k, 'v>) =
+    Map.ofArray [| for kv in dict -> kv.Key, kv.Value |] 
+
 let mutable private nodeId = 0
 
-type DwNode(tag : DwTag, attrs : (DwAt * DwValue) list) =
+type DwNode(tag : DwTag) =
 
     let id = System.Threading.Interlocked.Increment(&nodeId)
 
-    let attrs =
-        let m = System.Collections.Generic.Dictionary<DwAt, DwValue>()
-        for at, value in attrs do
-            m.Add(at, value)
-        m
-
-    let children = System.Collections.Generic.List<DwNode>()
-
-    let mutable frozen = false
-
     let mutable parent : DwNode option = None
+    let attrs = MutableMap<DwAt, DwValue>()
+    let children = MutableList<DwNode>()
+
+    override this.GetHashCode() = id
+
+    override this.Equals(other) = obj.ReferenceEquals(this, other)
 
     member this.Id = id
 
-    member this.Parent
-        with get() = parent
-        and private set node =
-            if frozen then
+    member this.Parent = parent
+
+    member private this.SetParent(parent') =
+        match parent with
+        | Some parent ->
+            if parent <> parent' then
                 raise(System.InvalidOperationException())
-            if node = None then
-                raise(System.ArgumentNullException())
-            if parent <> None then
-                raise(System.InvalidOperationException())
-            parent <- node
+        | None -> parent <- Some parent'
 
     member this.Tag = tag
 
-    member this.Attrs = seq { for kvp in attrs -> (kvp.Key, kvp.Value) }
+    member this.Attrs =
+        match parent with
+        | None -> mapOfDict attrs
+        | Some parent ->
+            let rec loop =
+                function
+                | [] -> mapOfDict attrs
+                | node1 :: node2 :: _ when obj.ReferenceEquals(this, node1) ->
+                    mapOfDict attrs
+                    |> Map.add DwAt.Sibling (DwValue.Ref node2)
+                | _ :: tl -> loop tl
+            loop parent.Children
 
-    member this.Children = children.AsReadOnly()
+    member this.Children = List.ofSeq children
 
-    member this.AddAttr(at, value) =
-        if frozen then
-            raise(System.InvalidOperationException())
-        attrs.Add(at, value)
+    member this.AddAttr(at, value) = attrs.Add(at, value)
 
-    member this.AddAttrs(kvs : #seq<_>) =
-        if frozen then
-            raise(System.InvalidOperationException())
-        for k, v in kvs do
-            attrs.Add(k, v)
+    member this.AddAttrs(xs) = Seq.iter this.AddAttr xs
 
-    member this.AddChild(child : DwNode) =
-        if frozen then
-            raise(System.InvalidOperationException())
-        child.Parent <- Some this
-        children.Add(child)
-
-    member this.Freeze() =
-        if not frozen then
-            frozen <- true
-            for i = 0 to children.Count - 2 do
-                let child = children.[i]
-                if child.Children.Count <> 0 then
-                    child.AddAttr(DwAt.Sibling, DwValue.Ref(children.[i + 1]))
-            for child in children do
-                child.Freeze()
+    member this.AddChild(node : DwNode) =
+        node.SetParent(this)
+        children.Add(node)
 
 and DwValue =
     | Bool of bool
@@ -298,9 +287,10 @@ let internal dwarfSection name =
 
 let private nodeName (node : DwNode) =
     node.Attrs
-    |> Seq.tryPick (
+    |> Map.tryFind DwAt.Name
+    |> Option.bind (
         function
-        | DwAt.Name, DwValue.String s -> Some s
+        | DwValue.String s -> Some s
         | _ -> None
     )
 
@@ -372,9 +362,9 @@ let rec nodeEq (node1 : DwNode) (node2 : DwNode) =
     seq {
         yield node1.Tag = node2.Tag
         yield Seq.length node1.Attrs = Seq.length node2.Attrs
-        let atps = Seq.zip node1.Attrs node2.Attrs
+        let atps = Seq.zip (Map.toSeq node1.Attrs) (Map.toSeq node2.Attrs)
         yield atps |> Seq.forall (fun ((at1, val1), (at2, val2)) -> at1 = at2 && valueEq val1 val2)
-        yield Seq.length node1.Children = Seq.length node2.Children
+        yield List.length node1.Children = List.length node2.Children
         let nps = Seq.zip node1.Children node2.Children
         yield nps |> Seq.forall (fun (a, b) -> nodeEq a b)
     }
@@ -413,13 +403,13 @@ let computeTypeSignature (typeNode : DwNode) =
             yield byte 'D'
             yield! enumBytes node.Tag
             let attrMap =
-                let attrMap = node.Attrs |> Map.ofSeq
+                let attrMap = node.Attrs
                 match attrMap |> Map.tryFind DwAt.Specification with
                 | None -> attrMap
                 | Some value ->
                     match value with
                     | DwValue.Ref node ->
-                        let specAttrMap = node.Attrs |> Map.ofSeq
+                        let specAttrMap = node.Attrs
                         match specAttrMap |> Map.tryFind DwAt.Declaration with
                         | Some(DwValue.Bool true) -> () // OK
                         | _ -> failwith "DW_AT_specification does not refer to a DIE with DW_AT_declaration."
@@ -571,14 +561,12 @@ let serialize (stringLabelMap : MutableMap<_, _>, abbrevMap : MutableMap<_, _>, 
     let nodeSet = MutableSet<_>()
 
     let rec pass1 (node : DwNode) =
-        node.Freeze()
         if not(nodeLabelMap.ContainsKey(node.Id)) then
             nodeLabelMap.Add(node.Id, Asm.createLabel())
         if nodeSet.Add(node.Id) then
-            for at, value in node.Attrs do
+            for at, value in Map.toSeq node.Attrs do
                 match value with
                 | DwValue.Ref node ->
-                    node.Freeze()
                     if not(nodeLabelMap.ContainsKey(node.Id)) then
                         nodeLabelMap.Add(node.Id, Asm.createLabel())
                 | _ -> ()
@@ -589,14 +577,14 @@ let serialize (stringLabelMap : MutableMap<_, _>, abbrevMap : MutableMap<_, _>, 
 
     let rec pass2 (node : DwNode) =
         let children = node.Children
-        let hasChildren = children.Count <> 0
+        let hasChildren = not(List.isEmpty children)
         let abbrev : DwAbbrev =
             {
                 tag = node.Tag
                 hasChildren = hasChildren
                 attrs =
                     [
-                        for at, value in node.Attrs ->
+                        for at, value in Map.toSeq node.Attrs ->
                             let form =
                                 match value with
                                 | DwValue.Bool true -> DwForm.FlagPresent // TODO: or Flag
@@ -619,7 +607,7 @@ let serialize (stringLabelMap : MutableMap<_, _>, abbrevMap : MutableMap<_, _>, 
         seq {
             yield Asm.Label(nodeLabelMap.[node.Id])
             yield Asm.Uleb128(UInt128 index)
-            for at, value in node.Attrs do
+            for at, value in Map.toSeq node.Attrs do
                 match value with
                 | DwValue.Bool true -> ()
                 | DwValue.Bool x -> yield Asm.U8(if x then 1uy else 0uy)

@@ -262,7 +262,7 @@ and Type =
     | PrimitiveType of Roma.Compiler.PrimitiveTypeKind
     | EnumType of Roma.Compiler.PrimitiveTypeKind * TypeRef
     | CompositeType of CompositeTypeInfo
-    | ArrayType of Type * (int * int option) list option (* shape *)
+    | ArrayType of Type * (int * int option) list (* shape *)
     | GCRefType of Type
     | ByRefType of Type
     | PointerType of Type

@@ -45,21 +45,6 @@ let private getNamespace fqn (ns : INamespace) =
     else
         ns.GetNamespace(fqn)
 
-let private int128OfConstant c =
-    match c with
-    | ConstantBool false -> Int128.Zero
-    | ConstantBool true -> Int128.One
-    | ConstantChar x -> Int128(uint32 x)
-    | ConstantI1 x -> Int128(int32 x)
-    | ConstantU1 x -> Int128(uint32 x)
-    | ConstantI2 x -> Int128(int32 x)
-    | ConstantU2 x -> Int128(uint32 x)
-    | ConstantI4 x -> Int128(x)
-    | ConstantU4 x -> Int128(x)
-    | ConstantI8 x -> Int128(x)
-    | ConstantU8 x -> Int128(x)
-    | _ -> failwith "Invalid constant type for enum."
-
 let mkScope() : TypeScope =
     {
         typeMap = MutableMap<_, _>()
