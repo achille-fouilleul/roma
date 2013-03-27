@@ -243,27 +243,23 @@ type DwNode(tag : DwTag) =
 
     member this.Tag = tag
 
-    member this.Attrs =
-        match parent with
-        | None -> mapOfDict attrs
-        | Some parent ->
-            let rec loop =
-                function
-                | [] -> mapOfDict attrs
-                | node1 :: node2 :: _ when obj.ReferenceEquals(this, node1) ->
-                    mapOfDict attrs
-                    |> Map.add DwAt.Sibling (DwValue.Ref node2)
-                | _ :: tl -> loop tl
-            loop parent.Children
+    member this.Attrs = mapOfDict attrs
 
     member this.Children = List.ofSeq children
 
     member this.AddAttr(at, value) = attrs.Add(at, value)
 
+    member this.TryGetAttr(at) =
+        match attrs.TryGetValue(at) with
+        | true, value -> Some value
+        | _ -> None
+
     member this.AddAttrs(xs) = Seq.iter this.AddAttr xs
 
     member this.AddChild(node : DwNode) =
         node.SetParent(this)
+        if children.Count > 0 then
+            children.[children.Count - 1].AddAttr(DwAt.Sibling, DwValue.Ref node)
         children.Add(node)
 
 and DwValue =
@@ -286,8 +282,7 @@ let internal dwarfSection name =
     | _ -> raise(System.NotSupportedException())
 
 let private nodeName (node : DwNode) =
-    node.Attrs
-    |> Map.tryFind DwAt.Name
+    node.TryGetAttr(DwAt.Name)
     |> Option.bind (
         function
         | DwValue.String s -> Some s
@@ -404,17 +399,16 @@ let computeTypeSignature (typeNode : DwNode) =
             yield! enumBytes node.Tag
             let attrMap =
                 let attrMap = node.Attrs
-                match attrMap |> Map.tryFind DwAt.Specification with
+                match node.TryGetAttr(DwAt.Specification) with
                 | None -> attrMap
                 | Some value ->
                     match value with
-                    | DwValue.Ref node ->
-                        let specAttrMap = node.Attrs
-                        match specAttrMap |> Map.tryFind DwAt.Declaration with
+                    | DwValue.Ref declNode ->
+                        match declNode.TryGetAttr(DwAt.Declaration) with
                         | Some(DwValue.Bool true) -> () // OK
                         | _ -> failwith "DW_AT_specification does not refer to a DIE with DW_AT_declaration."
                         seq {
-                            yield! Map.toSeq specAttrMap
+                            yield! Map.toSeq declNode.Attrs
                             yield! Map.toSeq attrMap
                         }
                         |> Map.ofSeq

@@ -40,7 +40,6 @@
     <Compile Include="Layout.fs" />
     <Compile Include="AssemblyCompilation.fs" />
     <None Include="Main.fs" />
-    <None Include="clic.fsx" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\roma.cli\roma.cli.fsproj">
