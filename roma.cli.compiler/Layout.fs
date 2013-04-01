@@ -81,6 +81,7 @@ type TypeLayoutManager(addrSize : AddrSize) =
                 TypeLayout.alignment = layout.alignment
             }
         | VolatileModifier t -> this.GetTypeLayout(t)
+        | PinnedModifier t -> this.GetTypeLayout(t)
 
     member this.GetCompositeTypeLayout(info : CompositeTypeInfo) =
         match typeLayoutMap.TryFind(info) with
@@ -97,12 +98,15 @@ type TypeLayoutManager(addrSize : AddrSize) =
                 typeLayoutMap <- Map.add info layout typeLayoutMap
                 layout
 
+            let translateTypeSig typeSig =
+                info.Module.TranslateToType(typeSig, (info.genArgs, []))
+
             let compute baseLayout =
                 let fieldTypes =
                     [
-                        for field in info.Fields do
+                        for field in typeDef.fields do
                             if not field.IsStatic then
-                                yield field, field.FieldType
+                                yield field, translateTypeSig field.typeSig
                     ]
                 let baseSize = match baseLayout with | Some l -> l.size | None -> 0u
                 let minSize = match typeDef.classSize with | Some s -> uint32 s | None -> 0u
@@ -116,8 +120,8 @@ type TypeLayoutManager(addrSize : AddrSize) =
                             for field, fieldType in fieldTypes ->
                                 let layout : FieldLayout =
                                     {
-                                        field = FieldId.UserField field.fieldDef
-                                        offset = Option.get field.fieldDef.offset
+                                        field = FieldId.UserField field
+                                        offset = Option.get field.offset
                                     }
                                 layout
                         ]
@@ -151,7 +155,7 @@ type TypeLayoutManager(addrSize : AddrSize) =
                                     offset := align fieldAlignment !offset
                                     let layout : FieldLayout =
                                         {
-                                            field = UserField field.fieldDef
+                                            field = UserField field
                                             offset = !offset
                                         }
                                     offset := !offset + fieldLayout.size

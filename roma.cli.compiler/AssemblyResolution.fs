@@ -175,6 +175,7 @@ type AssemblyResolver(sysLibPath, dirs, gac1Dirs, gac2Dirs) as this =
                 asm'
 
 and Assembly internal (asmResolver : AssemblyResolver, path) as this =
+    do printfn "%s" path
     let manifestModule = Module(this, path)
     let manifest =
         match manifestModule.AssemblyManifest with
@@ -256,17 +257,20 @@ and Module internal (asm, path) =
     member this.AssemblyManifest = m.assembly
     member this.TypeMap = typeMap
     member this.ExportedTypeMap = exportedTypeMap
+    member this.GlobalMethods = m.methods
+    member this.GlobalFields = m.fields
 
 and Type =
     | VoidType
     | PrimitiveType of Roma.Compiler.PrimitiveTypeKind
     | EnumType of Roma.Compiler.PrimitiveTypeKind * TypeRef
     | CompositeType of CompositeTypeInfo
-    | ArrayType of Type * (int * int option) list (* shape *)
+    | ArrayType of ArrayTypeInfo
     | GCRefType of Type
     | ByRefType of Type
     | PointerType of Type
     | VolatileModifier of Type
+    | PinnedModifier of Type
     // TODO: pointer-to-function
     // TODO: pinned, custom modifiers
 
@@ -276,18 +280,12 @@ and CompositeTypeInfo =
         genArgs : Type list
     }
 
+and ArrayTypeInfo =
+    {
+        elemType : Type
+        shape : (int * int option) list
+    }
+
 and TypeRef =
     | TopLevelTypeRef of Module * string * string // owner module, type namespace, type name
     | NestedTypeRef of TypeRef * string // enclosing type, type name
-
-type Method =
-    {
-        ownerType : CompositeTypeInfo
-        methodDef : MethodDef
-    }
-
-type Field =
-    {
-        ownerType : CompositeTypeInfo
-        fieldDef : FieldDef
-    }

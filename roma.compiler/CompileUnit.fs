@@ -401,6 +401,7 @@ type Module internal (name) =
     let node = DwNode(DwTag.Module)
     do node.AddAttr(DwAt.Name, DwValue.String name)
     let ns = Namespace(node) :> INamespace
+    let subprograms = MutableList<_>()
 
     interface INamespace with
         member this.GetNamespace(name) = ns.GetNamespace(name)
@@ -415,6 +416,12 @@ type Module internal (name) =
     member internal this.Node = node
 
     member this.Name = name
+
+    member this.AddSubprogram(name) =
+        let sub = Subprogram(name)
+        subprograms.Add(sub)
+        node.AddChild(sub.Node)
+        sub
 
 type UnitBase(tag, addrSize : AddrSize) =
     let ptrSize =

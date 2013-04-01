@@ -26,6 +26,7 @@ let compileAssemblies addrSize outputPath (asms : Roma.Cli.Compiler.Assembly lis
     let debugInfo = DwarfDebugInfo(addrSize)
     let compileUnit = debugInfo.CompileUnit
     let incompleteTypes = System.Collections.Generic.List<_>()
+    let incompleteMethods = System.Collections.Generic.List<_>()
 
     let rec lookup (info : CompositeTypeInfo) =
         let getTypeEntry (typeRef : TypeRef) (tc : ITypeContainer) name =
@@ -80,7 +81,7 @@ let compileAssemblies addrSize outputPath (asms : Roma.Cli.Compiler.Assembly lis
         | PrimitiveType kind -> compileUnit.GetPrimitiveType(kind) :> TypeEntry
         | EnumType(kind, typeRef) -> mkTypeInfo typeRef [] |> lookup
         | CompositeType info -> lookup info
-        | ArrayType(t, shape) -> compileUnit.GetManagedArrayType(translateType t, shape) :> TypeEntry
+        | ArrayType info -> compileUnit.GetManagedArrayType(translateType info.elemType, info.shape) :> TypeEntry
         | GCRefType t -> compileUnit.GetManagedPointerType(translateType t) :> TypeEntry
         | ByRefType t -> compileUnit.GetReferenceType(Some(translateType t)) :> TypeEntry
         | PointerType t ->
@@ -90,6 +91,80 @@ let compileAssemblies addrSize outputPath (asms : Roma.Cli.Compiler.Assembly lis
             |> compileUnit.GetPointerType
             :> TypeEntry
         | VolatileModifier t -> compileUnit.GetVolatileType(translateType t) :> TypeEntry
+        | PinnedModifier t -> translateType t // TODO
+
+    let setupMethod (m : Roma.Cli.Compiler.Module) (mth : MethodDef) genArgs (sub : Subprogram) =
+        let translateTypeSig typeSig =
+            m.TranslateToType(typeSig, genArgs)
+
+        match translateTypeSig mth.signature.retType with
+        | VoidType -> None
+        | retType -> Some(translateType retType)
+        |> sub.SetReturnType
+
+        for tsig, p in Seq.zip mth.signature.paramTypes mth.parameters do
+            let paramType = tsig |> translateTypeSig |> translateType
+            let name = p |> Option.map (fun p -> p.name)
+            sub.AddParameter(paramType, name) |> ignore
+
+        if mth.signature.callConv.callKind = CallKind.Vararg then
+            sub.AddUnspecifiedParameters()
+
+        mth.body |> Option.iter (
+            fun body ->
+
+                incompleteMethods.Add((body, sub))
+
+                for loc in body.locals do
+                    translateTypeSig loc |> ignore
+                for ec in body.excClauses do
+                    match ec with
+                    | Catch(_, ts) ->
+                        m.TranslateTypeSpecToType(ts, genArgs) |> ignore // TODO
+                    | _ -> ()
+                for _, instr in body.instrs do
+                    match instr with
+                    | Cpobj typeSpec
+                    | Ldobj typeSpec
+                    | Castclass typeSpec
+                    | Isinst typeSpec
+                    | Unbox typeSpec
+                    | Stobj typeSpec
+                    | Box typeSpec
+                    | Newarr typeSpec
+                    | Ldelema typeSpec
+                    | Ldelem typeSpec
+                    | Stelem typeSpec
+                    | Unbox_any typeSpec
+                    | Refanyval typeSpec
+                    | Mkrefany typeSpec
+                    | Ldtoken_type typeSpec
+                    | Initobj typeSpec
+                    | Constrained typeSpec
+                    | Sizeof typeSpec ->
+                        m.TranslateTypeSpecToType(typeSpec, genArgs) |> ignore // TODO
+                    | Jmp methodSpec
+                    | Call methodSpec
+                    | Callvirt methodSpec
+                    | Newobj methodSpec
+                    | Ldtoken_method methodSpec ->
+                        methodSpec.methodRef.typeRef |> Option.iter (
+                            fun ts ->
+                                m.TranslateTypeSpecToType(ts, genArgs) |> ignore // TODO
+                        )
+                    | Ldfld fieldRef
+                    | Ldflda fieldRef
+                    | Stfld fieldRef
+                    | Ldsfld fieldRef
+                    | Ldsflda fieldRef
+                    | Stsfld fieldRef
+                    | Ldtoken_field fieldRef ->
+                        fieldRef.typeRef |> Option.iter (
+                            fun ts ->
+                                m.TranslateTypeSpecToTypeInfo(ts, genArgs) |> ignore // TODO
+                        )
+                    | _ -> ()
+        )
 
     for asm in asms do
         for m in asm.Modules do
@@ -101,12 +176,18 @@ let compileAssemblies addrSize outputPath (asms : Roma.Cli.Compiler.Assembly lis
                         lookup t |> ignore // create type
                     visit typeRef.NestedTypes
             visit m.Types
+            for mth in m.GlobalMethods do
+                if not mth.IsGeneric then
+                    if not mth.IsStatic then
+                        failwith "Non-static global method"
+                    let sub = compileUnit.GetModule(m.ScopeName).AddSubprogram(mth.name)
+                    setupMethod m mth ([], []) sub
 
     let complete (t : CompositeTypeInfo) (cte : CompositeTypeBase) =
         let m = t.Module
         let genArgs = (t.genArgs, [])
         let translateTypeSig typeSig =
-            translateType (m.TranslateToType(typeSig, genArgs))
+            m.TranslateToType(typeSig, genArgs)
 
         let td = t.TypeDef
 
@@ -121,24 +202,16 @@ let compileAssemblies addrSize outputPath (asms : Roma.Cli.Compiler.Assembly lis
                 | VtablePtr | SyncBlock -> () // TODO?
                 | UserField fld ->
                     let mem = cte.AddMember(fld.name)
-                    mem.SetType(translateTypeSig fld.typeSig)
+                    mem.SetType(translateTypeSig fld.typeSig |> translateType)
                     mem.SetDataMemberLocation(int fldLayout.offset)
 
-        for mth in t.Methods do
+        for mth in td.methods do
             if not mth.IsGeneric then
-                let def = mth.methodDef
-                let sub = cte.AddSubprogram(mth.methodDef.name)
-                let flags = def.flags
+                let sub = cte.AddSubprogram(mth.name)
+                if mth.IsVirtual then
+                    sub.SetVirtual(mth.IsAbstract)
 
-                if (flags &&& MethodAttributes.Virtual) = MethodAttributes.Virtual then
-                    sub.SetVirtual((flags &&& MethodAttributes.Abstract) = MethodAttributes.Abstract)
-
-                match mth.ReturnType with
-                | VoidType -> None
-                | retType -> Some(translateType retType)
-                |> sub.SetReturnType
-
-                if def.signature.callConv.hasThis then
+                if not mth.IsStatic then
                     let paramType =
                         match cte :> obj with
                         | :? StructTypeEntry ->
@@ -149,22 +222,21 @@ let compileAssemblies addrSize outputPath (asms : Roma.Cli.Compiler.Assembly lis
                     param.SetArtificial()
                     sub.SetObjectPointer(param)
 
-                for paramType, p in Seq.zip mth.ParamTypes mth.methodDef.parameters do
-                    let name = p |> Option.map (fun p -> p.name)
-                    sub.AddParameter(translateType paramType, name) |> ignore
-
-                if def.signature.callConv.callKind = CallKind.Vararg then
-                    sub.AddUnspecifiedParameters()
+                setupMethod m mth genArgs sub
 
     let rec loop() =
         let newTypes = Seq.toArray incompleteTypes
-        incompleteTypes.Clear()
-        if not(Array.isEmpty newTypes) then
-            printfn "%s: %d incomplete types" asms.Head.Name.name newTypes.Length
+        if Array.isEmpty newTypes then
+            for body, sub in incompleteMethods do
+                () // TODO
+        else
+            incompleteTypes.Clear()
             for t, cte in newTypes do
                 complete t cte
             loop()
     loop()
+
+    printfn "%d methods" incompleteMethods.Count
 
     let lines = debugInfo.Serialize()
 

@@ -223,7 +223,7 @@ type DwNode(tag : DwTag) =
     let id = System.Threading.Interlocked.Increment(&nodeId)
 
     let mutable parent : DwNode option = None
-    let attrs = MutableMap<DwAt, DwValue>()
+    let mutable attrs = Map.empty<DwAt, DwValue>
     let children = MutableList<DwNode>()
 
     override this.GetHashCode() = id
@@ -243,16 +243,15 @@ type DwNode(tag : DwTag) =
 
     member this.Tag = tag
 
-    member this.Attrs = mapOfDict attrs
+    member this.Attrs = attrs
 
     member this.Children = List.ofSeq children
 
-    member this.AddAttr(at, value) = attrs.Add(at, value)
+    member this.AddAttr(at, value) =
+        attrs <- Map.add at value attrs
 
     member this.TryGetAttr(at) =
-        match attrs.TryGetValue(at) with
-        | true, value -> Some value
-        | _ -> None
+        Map.tryFind at attrs
 
     member this.AddAttrs(xs) = Seq.iter this.AddAttr xs
 
@@ -356,8 +355,9 @@ let private sigAttrs =
 let rec nodeEq (node1 : DwNode) (node2 : DwNode) =
     seq {
         yield node1.Tag = node2.Tag
-        yield Seq.length node1.Attrs = Seq.length node2.Attrs
-        let atps = Seq.zip (Map.toSeq node1.Attrs) (Map.toSeq node2.Attrs)
+        yield node1.Attrs.Count = node2.Attrs.Count
+        let sort = Map.toSeq >> Seq.sortBy fst
+        let atps = Seq.zip (sort node1.Attrs) (sort node2.Attrs)
         yield atps |> Seq.forall (fun ((at1, val1), (at2, val2)) -> at1 = at2 && valueEq val1 val2)
         yield List.length node1.Children = List.length node2.Children
         let nps = Seq.zip node1.Children node2.Children

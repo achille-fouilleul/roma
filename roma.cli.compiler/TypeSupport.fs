@@ -145,6 +145,19 @@ let private isValueTypeRef (typeRef : TypeRef) =
             |> isSysType("System", "ValueType")
         | _ -> false
 
+type MethodDef with
+    member this.IsGeneric =
+        not(Array.isEmpty this.genericParams)
+
+    member this.IsVirtual =
+        (this.flags &&& MethodAttributes.Virtual) = MethodAttributes.Virtual
+
+    member this.IsAbstract =
+        (this.flags &&& MethodAttributes.Abstract) = MethodAttributes.Abstract
+
+    member this.IsStatic =
+        (this.flags &&& MethodAttributes.Static) = MethodAttributes.Static
+
 type FieldDef with
     member this.IsStatic =
         (this.flags &&& FieldAttributes.Static) = FieldAttributes.Static
@@ -169,24 +182,6 @@ type CompositeTypeInfo with
     member this.Namespace = this.TypeDef.typeNamespace
     member this.Name = this.TypeDef.typeName
 
-    member this.Methods =
-        seq {
-            for mthDef in this.TypeDef.methods ->
-                {
-                    Method.ownerType = this
-                    Method.methodDef = mthDef
-                }
-        }
-
-    member this.Fields =
-        seq {
-            for fldDef in this.TypeDef.fields ->
-                {
-                    Field.ownerType = this
-                    Field.fieldDef = fldDef
-                }
-        }
-
     member private this.SysType(ns, name) : CompositeTypeInfo =
         {
             typeRef = TopLevelTypeRef(getSysLib this.Module, ns, name)
@@ -196,14 +191,7 @@ type CompositeTypeInfo with
     member this.BaseType : CompositeTypeInfo option =
         this.TypeDef.baseType
         |> Option.map (
-            function
-            | Choice1Of2 typeRef -> mkTypeInfo (translateToTypeRef this.Module typeRef) []
-            | Choice2Of2(GenericInst(TypeSig.Class typeRef, genArgs))
-            | Choice2Of2(GenericInst(TypeSig.ValueType typeRef, genArgs)) ->
-                let typeRef' = translateToTypeRef this.Module typeRef
-                let genArgs' = [ for t in genArgs -> this.Module.TranslateToType(t, (this.genArgs, [])) ]
-                mkTypeInfo typeRef' genArgs'
-            | _ -> failwith "Invalid TypeSpec."
+            fun ts -> this.Module.TranslateTypeSpecToTypeInfo(ts, (this.genArgs, []))
         )
 
 and TypeRef with
@@ -241,6 +229,9 @@ and Module with
         }
 
     member this.TranslateToType(typeSig : TypeSig, genArgs) =
+        let translateToType typeSig' =
+            this.TranslateToType(typeSig', genArgs)
+
         match typeSig with
         | Boolean -> PrimitiveType Roma.Compiler.PrimitiveTypeKind.Bool
         | Char -> PrimitiveType Roma.Compiler.PrimitiveTypeKind.Char16
@@ -256,29 +247,43 @@ and Module with
         | R8 -> PrimitiveType Roma.Compiler.PrimitiveTypeKind.Float64
         | I -> PrimitiveType Roma.Compiler.PrimitiveTypeKind.SIntPtr
         | U -> PrimitiveType Roma.Compiler.PrimitiveTypeKind.UIntPtr
-        | Array(elemType, shape) -> ArrayType(this.TranslateToType(elemType, genArgs), shape)
-        | ByRef typeSig -> ByRefType(this.TranslateToType(typeSig, genArgs))
+        | Array(elemType, shape) ->
+            let info : ArrayTypeInfo =
+                {
+                    elemType = translateToType elemType
+                    shape = shape
+                }
+            ArrayType info
+        | ByRef typeSig -> ByRefType(translateToType typeSig)
         | Fnptr methodSig -> raise(NotImplementedException()) // TODO
         | GenericInst(genType, args) ->
-            let args' =
+            let k (typeRef : Roma.Cli.TypeRef) =
                 [
                     for arg in args ->
-                        this.TranslateToType(arg, genArgs)
+                        translateToType arg
                 ]
-            let k (typeRef : Roma.Cli.TypeRef) =
-                mkTypeInfo (translateToTypeRef this typeRef) args'
+                |> mkTypeInfo (translateToTypeRef this typeRef)
                 |> CompositeType
             match genType with
             | TypeSig.Class typeRef -> GCRefType(k typeRef) // TODO: reference type check
-            | TypeSig.ValueType typeRef -> k typeRef // TODO: value type check
+            | TypeSig.ValueType typeRef ->
+                match translateToTypeRef this typeRef with
+                | IsEnum kind as typeRef -> EnumType(kind, typeRef)
+                | _ -> k typeRef // TODO: value type check
             | _ -> failwith "Bad GenericInst."
         | MVar n ->
             let _, methodArgs = genArgs
             List.nth methodArgs n
         | Object -> GCRefType(this.SysType("System", "String"))
-        | Ptr typeSig -> PointerType(this.TranslateToType(typeSig, genArgs))
+        | Ptr typeSig -> PointerType(translateToType typeSig)
         | String -> GCRefType(this.SysType("System", "Object"))
-        | SZArray elemType -> ArrayType(this.TranslateToType(elemType, genArgs), [])
+        | SZArray elemType ->
+            let info : ArrayTypeInfo =
+                {
+                    elemType = translateToType elemType
+                    shape = []
+                }
+            ArrayType info
         | TypedByRef -> this.SysType("System", "TypedReference")
         | Var n ->
             let typeArgs, _ = genArgs
@@ -288,10 +293,17 @@ and Module with
             let modRef = translateToTypeRef this modType
             match modRef with
             | SysTypeRef("System.Runtime.CompilerServices", "IsVolatile") ->
-                VolatileModifier(this.TranslateToType(typeSig, genArgs))
+                VolatileModifier(translateToType typeSig)
             | _ -> failwith "Invalid modreq."
-        | ModOpt _ -> raise(NotImplementedException()) // TODO
-        | Pinned _ -> raise(NotImplementedException()) // TODO
+        | ModOpt(modType, typeSig) ->
+            let modRef = translateToTypeRef this modType
+            match modRef with
+            | SysTypeRef("System.Runtime.CompilerServices", "IsExplicitlyDereferenced")
+            | SysTypeRef("System.Runtime.CompilerServices", "IsLong") ->
+                translateToType typeSig
+            | _ ->
+                raise(NotImplementedException()) // TODO
+        | Pinned typeSig -> PinnedModifier(translateToType typeSig)
         | TypeSig.Class typeRef ->
             // TODO: reference type check
             mkTypeInfo (translateToTypeRef this typeRef) []
@@ -312,31 +324,24 @@ and Module with
 
     member this.IsSysLib = isSysLib this
 
-type Method with
-    member private this.TranslateType(typeSig) =
-        let m = this.ownerType.Module
-        m.TranslateToType(typeSig, (this.ownerType.genArgs, []))
+    member this.TranslateTypeSpecToTypeInfo(typeSpec, genArgs) =
+        match typeSpec with
+        | Choice1Of2 typeRef -> mkTypeInfo (translateToTypeRef this typeRef) []
+        | Choice2Of2(GenericInst(TypeSig.Class typeRef, typeArgs))
+        | Choice2Of2(GenericInst(TypeSig.ValueType typeRef, typeArgs)) ->
+            let typeRef' = translateToTypeRef this typeRef
+            let genArgs' = [ for t in typeArgs -> this.TranslateToType(t, genArgs) ]
+            mkTypeInfo typeRef' genArgs'
+        | _ -> failwith "Invalid TypeSpec."
 
-    member this.IsGeneric =
-        not(Array.isEmpty this.methodDef.genericParams)
-
-    member this.ReturnType =
-        this.TranslateType(this.methodDef.signature.retType)
-
-    member this.ParamTypes =
-        [|
-            for typeSig in this.methodDef.signature.paramTypes ->
-                this.TranslateType(typeSig)
-        |]
-
-type Field with
-    member private this.TranslateType(typeSig) =
-        let m = this.ownerType.Module
-        m.TranslateToType(typeSig, (this.ownerType.genArgs, []))
-
-    member this.IsStatic =
-        (this.fieldDef.flags &&& FieldAttributes.Static) = FieldAttributes.Static
-
-    member this.FieldType =
-        this.TranslateType(this.fieldDef.typeSig)
+    member this.TranslateTypeSpecToType(typeSpec, genArgs) =
+        match typeSpec with
+        | Choice1Of2 tref ->
+            let typeRef = translateToTypeRef this tref
+            let t = mkTypeInfo typeRef [] |> CompositeType
+            if typeRef.IsValueType then
+                t
+            else
+                GCRefType t
+        | Choice2Of2 tsig -> this.TranslateToType(tsig, genArgs)
 

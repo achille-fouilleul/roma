@@ -39,7 +39,6 @@
     <Compile Include="TypeSupport.fs" />
     <Compile Include="Layout.fs" />
     <Compile Include="AssemblyCompilation.fs" />
-    <None Include="Main.fs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\roma.cli\roma.cli.fsproj">
